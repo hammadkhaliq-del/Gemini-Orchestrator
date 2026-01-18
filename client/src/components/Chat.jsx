@@ -1,16 +1,20 @@
 import { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { EmailList, FullEmailView } from './EmailCard';
+import ReactMarkdown from 'react-markdown';
 
 // Tool Activity Indicator Component
 function ToolIndicator({ toolCall, toolResult }) {
   const toolIcons = {
     searchEmails: '🔍',
-    readEmail:  '📧'
+    readEmail: '📧',
+    draftReply: '✍️'
   };
   
   const toolLabels = {
     searchEmails: 'Searching emails',
-    readEmail: 'Reading email'
+    readEmail: 'Reading email',
+    draftReply: 'Drafting reply'
   };
 
   if (toolResult) {
@@ -20,6 +24,8 @@ function ToolIndicator({ toolCall, toolResult }) {
         <span>
           {toolResult.name === 'searchEmails' 
             ? `Found ${toolResult.emailCount} email(s)` 
+            : toolResult.name === 'draftReply'
+            ? 'Draft created'
             : 'Email loaded'}
         </span>
       </div>
@@ -28,8 +34,44 @@ function ToolIndicator({ toolCall, toolResult }) {
 
   return (
     <div className="flex items-center gap-2 text-xs text-blue-600 bg-blue-50 px-3 py-2 rounded-lg w-fit mb-2 animate-pulse">
-      <span>{toolIcons[toolCall?. name] || '⚙️'}</span>
+      <span>{toolIcons[toolCall?.name] || '⚙️'}</span>
       <span>{toolLabels[toolCall?.name] || 'Processing'}...</span>
+    </div>
+  );
+}
+
+// Message Component with Markdown support
+function MessageContent({ text, isUser }) {
+  if (isUser) {
+    return <p className="whitespace-pre-wrap leading-relaxed">{text}</p>;
+  }
+  
+  return (
+    <div className="prose prose-sm max-w-none prose-p:my-1 prose-ul:my-1 prose-li:my-0">
+      <ReactMarkdown
+        components={{
+          // Custom link styling
+          a: ({ href, children }) => (
+            <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+              {children}
+            </a>
+          ),
+          // Custom list styling
+          ul: ({ children }) => <ul className="list-disc pl-4 space-y-1">{children}</ul>,
+          ol: ({ children }) => <ol className="list-decimal pl-4 space-y-1">{children}</ol>,
+          // Custom code block
+          code: ({ inline, children }) => 
+            inline ? (
+              <code className="bg-gray-100 px-1 py-0.5 rounded text-sm">{children}</code>
+            ) : (
+              <pre className="bg-gray-100 p-2 rounded-lg overflow-x-auto">
+                <code>{children}</code>
+              </pre>
+            )
+        }}
+      >
+        {text}
+      </ReactMarkdown>
     </div>
   );
 }
@@ -41,13 +83,20 @@ export default function Chat() {
   const [isTyping, setIsTyping] = useState(false);
   const [currentTool, setCurrentTool] = useState(null);
   const [toolResult, setToolResult] = useState(null);
+  const [emailData, setEmailData] = useState(null); // Store email results
+  const [fullEmail, setFullEmail] = useState(null); // For expanded email view
   const messagesEndRef = useRef(null);
 
   // Auto-scroll to bottom
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
-  useEffect(scrollToBottom, [messages, currentTool]);
+  useEffect(scrollToBottom, [messages, currentTool, emailData]);
+
+  // Handle "Read More" click on email cards
+  const handleReadEmail = async (emailId) => {
+    setInput(`Read the full content of email ${emailId}`);
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -60,20 +109,21 @@ export default function Chat() {
     setIsTyping(true);
     setCurrentTool(null);
     setToolResult(null);
+    setEmailData(null);
 
     // 2. Prepare history for backend (map to Gemini format)
-    const history = messages. map(m => ({
-      role: m. role === 'user' ? 'user' : 'model',
+    const history = messages.map(m => ({
+      role: m.role === 'user' ? 'user' : 'model',
       parts: [{ text: m.text }]
     }));
 
     try {
       // 3. Start Request
       const response = await fetch('http://localhost:5000/api/chat', {
-        method:  'POST',
-        headers:  { 'Content-Type': 'application/json' },
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ message: userMessage. text, history }),
+        body: JSON.stringify({ message: userMessage.text, history }),
       });
 
       // Check for auth errors
@@ -87,13 +137,13 @@ export default function Chat() {
       }
 
       // 4. Handle Stream
-      const reader = response.body. getReader();
+      const reader = response.body.getReader();
       const decoder = new TextDecoder();
-      let assistantMessage = { role: 'model', text: '' };
+      let assistantMessage = { role: 'model', text: '', emails: null, fullEmail: null };
       let hasAddedMessage = false;
 
       while (true) {
-        const { done, value } = await reader. read();
+        const { done, value } = await reader.read();
         if (done) break;
 
         const chunk = decoder.decode(value);
@@ -117,19 +167,29 @@ export default function Chat() {
                 setToolResult(null);
               }
               
-              // Handle tool results
+              // Handle tool results with email data
               if (data.type === 'tool_result') {
                 setToolResult(data.toolResult);
+                
+                // Store email data for rendering cards
+                if (data.toolResult.emails) {
+                  assistantMessage.emails = data.toolResult.emails;
+                  setEmailData(data.toolResult.emails);
+                }
+                if (data.toolResult.email) {
+                  assistantMessage.fullEmail = data.toolResult.email;
+                  setFullEmail(data.toolResult.email);
+                }
               }
               
               // Handle final text response
-              if (data. type === 'text' && data.text) {
+              if (data.type === 'text' && data.text) {
                 setCurrentTool(null);
                 setToolResult(null);
                 assistantMessage.text = data.text;
                 
                 if (!hasAddedMessage) {
-                  setMessages(prev => [... prev, { ... assistantMessage }]);
+                  setMessages(prev => [...prev, { ...assistantMessage }]);
                   hasAddedMessage = true;
                 } else {
                   setMessages(prev => {
@@ -145,7 +205,7 @@ export default function Chat() {
                 console.error('Stream error:', data.error);
                 assistantMessage.text = `Sorry, an error occurred: ${data.error}`;
                 if (!hasAddedMessage) {
-                  setMessages(prev => [... prev, { ...assistantMessage }]);
+                  setMessages(prev => [...prev, { ...assistantMessage }]);
                 }
               }
             } catch (e) {
@@ -200,7 +260,7 @@ export default function Chat() {
             
             <div className="grid gap-2 text-sm max-w-md">
               <div className="bg-white p-3 rounded-lg shadow-sm border border-gray-100 hover:border-blue-200 cursor-pointer transition-all"
-                   onClick={() => setInput("Do I have any unread emails? ")}>
+                   onClick={() => setInput("Do I have any unread emails?")}>
                 💡 "Do I have any unread emails?"
               </div>
               <div className="bg-white p-3 rounded-lg shadow-sm border border-gray-100 hover:border-blue-200 cursor-pointer transition-all"
@@ -216,17 +276,31 @@ export default function Chat() {
         )}
         
         {messages.map((msg, idx) => (
-          <div 
-            key={idx} 
-            className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-          >
-            <div className={`max-w-[80%] rounded-2xl p-4 ${
-              msg.role === 'user' 
-                ?  'bg-blue-600 text-white rounded-br-none' 
-                : 'bg-white text-gray-800 shadow-sm rounded-bl-none border border-gray-100'
-            }`}>
-              <p className="whitespace-pre-wrap leading-relaxed">{msg.text}</p>
+          <div key={idx} className="space-y-3">
+            {/* Message bubble */}
+            <div className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+              <div className={`max-w-[85%] rounded-2xl p-4 ${
+                msg.role === 'user' 
+                  ? 'bg-blue-600 text-white rounded-br-none' 
+                  : 'bg-white text-gray-800 shadow-sm rounded-bl-none border border-gray-100'
+              }`}>
+                <MessageContent text={msg.text} isUser={msg.role === 'user'} />
+              </div>
             </div>
+            
+            {/* Email cards if present */}
+            {msg.emails && msg.emails.length > 0 && (
+              <div className="ml-4">
+                <EmailList emails={msg.emails} onReadMore={handleReadEmail} />
+              </div>
+            )}
+            
+            {/* Full email view if present */}
+            {msg.fullEmail && (
+              <div className="ml-4">
+                <FullEmailView email={msg.fullEmail} />
+              </div>
+            )}
           </div>
         ))}
         
@@ -237,7 +311,7 @@ export default function Chat() {
           </div>
         )}
         
-        {isTyping && ! currentTool && (
+        {isTyping && !currentTool && (
           <div className="flex justify-start">
             <div className="text-xs text-gray-400 bg-white px-3 py-2 rounded-lg shadow-sm">
               Gemini is thinking...
@@ -260,7 +334,7 @@ export default function Chat() {
           />
           <button 
             type="submit" 
-            disabled={! input.trim() || isTyping}
+            disabled={!input.trim() || isTyping}
             className="bg-blue-600 text-white px-6 py-3 rounded-xl hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium transition-colors"
           >
             Send

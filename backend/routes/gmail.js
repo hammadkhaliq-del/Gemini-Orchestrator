@@ -22,8 +22,8 @@ function extractEmailBody(payload) {
       // Nested parts (for complex emails)
       if (part.parts) {
         for (const subPart of part.parts) {
-          if (subPart. mimeType === 'text/plain' && subPart.body && subPart.body.data) {
-            body = Buffer. from(subPart.body. data, 'base64').toString('utf-8');
+          if (subPart.mimeType === 'text/plain' && subPart.body && subPart.body.data) {
+            body = Buffer.from(subPart.body.data, 'base64').toString('utf-8');
             break;
           }
         }
@@ -36,8 +36,8 @@ function extractEmailBody(payload) {
 
 // Helper function to get header value
 function getHeader(headers, name) {
-  const header = headers.find(h => h.name. toLowerCase() === name.toLowerCase());
-  return header ? header.value :  '';
+  const header = headers.find(h => h.name.toLowerCase() === name.toLowerCase());
+  return header ? header.value : '';
 }
 
 // Search emails
@@ -54,22 +54,22 @@ router.get('/search', isAuthenticated, async (req, res) => {
     const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
     
     // Search for messages
-    const listResponse = await gmail.users.messages. list({
+    const listResponse = await gmail.users.messages.list({
       userId: 'me',
       q: query,
       maxResults: Math.min(parseInt(maxResults), 10) // Cap at 10
     });
     
-    if (! listResponse.data.messages || listResponse.data.messages.length === 0) {
+    if (!listResponse.data.messages || listResponse.data.messages.length === 0) {
       return res.json({ emails: [], message: 'No emails found matching your search.' });
     }
     
     // Get details for each message
     const emails = await Promise.all(
       listResponse.data.messages.map(async (msg) => {
-        const detail = await gmail.users.messages. get({
+        const detail = await gmail.users.messages.get({
           userId: 'me',
-          id: msg. id,
+          id: msg.id,
           format: 'metadata',
           metadataHeaders: ['From', 'Subject', 'Date', 'To']
         });
@@ -95,8 +95,8 @@ router.get('/search', isAuthenticated, async (req, res) => {
     });
     
   } catch (error) {
-    console.error('Gmail search error:', error. message);
-    res.status(500).json({ error: 'Failed to search emails:  ' + error.message });
+    console.error('Gmail search error:', error.message);
+    res.status(500).json({ error: 'Failed to search emails: ' + error.message });
   }
 });
 
@@ -115,7 +115,7 @@ router.get('/message/:id', isAuthenticated, async (req, res) => {
     });
     
     const headers = message.data.payload.headers;
-    const body = extractEmailBody(message. data.payload);
+    const body = extractEmailBody(message.data.payload);
     
     res.json({
       id: message.data.id,
@@ -126,7 +126,7 @@ router.get('/message/:id', isAuthenticated, async (req, res) => {
       date: getHeader(headers, 'Date'),
       snippet: message.data.snippet,
       body: body || message.data.snippet,
-      labelIds: message. data.labelIds || []
+      labelIds: message.data.labelIds || []
     });
     
   } catch (error) {
