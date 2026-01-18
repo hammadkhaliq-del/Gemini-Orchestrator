@@ -13,19 +13,26 @@ const PORT = process.env.PORT || 5000;
 // Middleware
 app.use(cors({
   origin: process.env.FRONTEND_URL,
-  credentials: true 
+  credentials: true
 }));
 app.use(express.json());
 
 // Session configuration
+const SQLiteStore = require('connect-sqlite3')(session);
+
+// Session configuration
 app.use(session({
+  store: new SQLiteStore({
+    db: 'sessions.db',
+    dir: './'
+  }),
   secret: process.env.SESSION_SECRET,
-  resave:  false,
+  resave: false,
   saveUninitialized: false,
-  cookie:  { 
+  cookie: {
     secure: false, // Set 'true' if using https in production
     httpOnly: true,
-    maxAge: 24 * 60 * 60 * 1000 // 24 hours
+    maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
   }
 }));
 
@@ -36,7 +43,7 @@ app.use('/api/gmail', gmailRoutes);
 
 // Health check route
 app.get('/', (req, res) => {
-  res.json({ 
+  res.json({
     status: 'running',
     message: 'Gemini Orchestrator Backend is Running.. .',
     version: '2.0.0'

@@ -1,435 +1,69 @@
 const express = require('express');
 const router = express.Router();
 const { GoogleGenerativeAI } = require('@google/generative-ai');
-const { google } = require('googleapis');
 const isAuthenticated = require('../middleware/authMiddleware');
 const { toolDefinitions, ORCHESTRATOR_SYSTEM_PROMPT } = require('../utils/tools');
 const oauth2Client = require('../utils/googleClient');
 
+// Import new services
+const GmailService = require('../services/gmail');
+const CalendarService = require('../services/calendar');
+const DriveService = require('../services/drive');
+
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-
-function getHeader(headers, name) {
-  const header = headers.find(h => h.name.toLowerCase() === name.toLowerCase());
-  return header ? header.value : '';
-}
-
-function extractEmailBody(payload) {
-  let body = '';
-  if (payload.body && payload.body.data) {
-    body = Buffer.from(payload.body.data, 'base64').toString('utf-8');
-  } else if (payload.parts) {
-    for (const part of payload.parts) {
-      if (part.mimeType === 'text/plain' && part.body && part.body.data) {
-        body = Buffer.from(part.body.data, 'base64').toString('utf-8');
-        break;
-      }
-      if (part.parts) {
-        for (const subPart of part.parts) {
-          if (subPart.mimeType === 'text/plain' && subPart.body && subPart.body.data) {
-            body = Buffer.from(subPart.body.data, 'base64').toString('utf-8');
-            break;
-          }
-        }
-      }
-    }
-  }
-  return body;
-}
-
-// Map file types to MIME types for Drive queries
-const FILE_TYPE_MAP = {
-  document: "application/vnd.google-apps.document",
-  spreadsheet: "application/vnd.google-apps.spreadsheet",
-  presentation: "application/vnd.google-apps.presentation",
-  pdf: "application/pdf",
-  image: "image/",
-  folder: "application/vnd.google-apps.folder"
-};
-
-// Get file icon based on MIME type
-function getFileIcon(mimeType) {
-  if (mimeType?.includes('document')) return '📄';
-  if (mimeType?.includes('spreadsheet')) return '📊';
-  if (mimeType?.includes('presentation')) return '📽️';
-  if (mimeType?.includes('pdf')) return '📕';
-  if (mimeType?.includes('image')) return '🖼️';
-  if (mimeType?.includes('folder')) return '📁';
-  if (mimeType?.includes('video')) return '🎬';
-  if (mimeType?.includes('audio')) return '🎵';
-  return '📎';
-}
 
 async function executeTool(toolName, args, session) {
   oauth2Client.setCredentials(session.tokens);
-  const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
-  const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
-  const drive = google.drive({ version: 'v3', auth: oauth2Client });
-  const docs = google.docs({ version: 'v1', auth: oauth2Client });
-  
+
+  // Initialize services with the authenticated client
+  const gmailService = new GmailService(oauth2Client);
+  const calendarService = new CalendarService(oauth2Client);
+  const driveService = new DriveService(oauth2Client);
+
   console.log(`Executing tool: ${toolName} with args: `, args);
-  
+
   try {
     switch (toolName) {
       // === EMAIL TOOLS ===
       case 'searchEmails': {
-        const maxResults = Math.min(args.maxResults || 5, 10);
-        const listResponse = await gmail.users.messages.list({
-          userId: 'me',
-          q: args.query,
-          maxResults: maxResults
-        });
-        
-        if (!listResponse.data.messages || listResponse.data.messages.length === 0) {
-          return { success: true, emails: [], message: `No emails found matching "${args.query}".` };
-        }
-        
-        const emails = await Promise.all(
-          listResponse.data.messages.map(async (msg) => {
-            const detail = await gmail.users.messages.get({
-              userId: 'me',
-              id: msg.id,
-              format: 'metadata',
-              metadataHeaders: ['From', 'Subject', 'Date', 'To']
-            });
-            const headers = detail.data.payload.headers;
-            return {
-              id: msg.id,
-              threadId: msg.threadId,
-              from: getHeader(headers, 'From'),
-              to: getHeader(headers, 'To'),
-              subject: getHeader(headers, 'Subject') || '(No Subject)',
-              date: getHeader(headers, 'Date'),
-              snippet: detail.data.snippet,
-              labelIds: detail.data.labelIds || []
-            };
-          })
-        );
-        
-        return { success: true, emails, count: emails.length, query: args.query };
+        return await gmailService.searchEmails(args.query, args.maxResults);
       }
-      
+
       case 'readEmail': {
-        const message = await gmail.users.messages.get({
-          userId: 'me',
-          id: args.emailId,
-          format: 'full'
-        });
-        const headers = message.data.payload.headers;
-        const body = extractEmailBody(message.data.payload);
-        
-        return { 
-          success: true,
-          email: {
-            id: message.data.id,
-            threadId: message.data.threadId,
-            from: getHeader(headers, 'From'),
-            to: getHeader(headers, 'To'),
-            subject: getHeader(headers, 'Subject') || '(No Subject)',
-            date: getHeader(headers, 'Date'),
-            body: body || message.data.snippet,
-            snippet: message.data.snippet,
-            labelIds: message.data.labelIds || []
-          }
-        };
+        return await gmailService.readEmail(args.emailId);
       }
-      
+
       case 'draftReply': {
-        const { to, subject, body, inReplyTo } = args;
-        const emailLines = [
-          `To: ${to}`,
-          `Subject: ${subject.startsWith('Re: ') ? subject : `Re: ${subject}`}`,
-          'Content-Type: text/plain; charset=utf-8',
-          'MIME-Version: 1.0',
-          '',
-          body
-        ];
-        if (inReplyTo) emailLines.splice(2, 0, `In-Reply-To: ${inReplyTo}`);
-        
-        const emailContent = emailLines.join('\r\n');
-        const encodedEmail = Buffer.from(emailContent).toString('base64')
-          .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-        
-        const draft = await gmail.users.drafts.create({
-          userId: 'me',
-          requestBody: { message: { raw: encodedEmail } }
-        });
-        
-        return {
-          success: true,
-          draft: {
-            id: draft.data.id,
-            to,
-            subject: subject.startsWith('Re: ') ? subject : `Re: ${subject}`,
-            bodyPreview: body.slice(0, 100) + (body.length > 100 ? '...' : '')
-          },
-          message: 'Draft created! Find it in your Gmail Drafts.'
-        };
+        return await gmailService.draftReply(args.to, args.subject, args.body, args.inReplyTo);
       }
-      
+
       // === CALENDAR TOOLS ===
       case 'getCalendarEvents': {
-        const now = new Date();
-        const timeMin = args.timeMin || now.toISOString();
-        const timeMax = args.timeMax || new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
-        
-        const response = await calendar.events.list({
-          calendarId: 'primary',
-          timeMin: timeMin,
-          timeMax: timeMax,
-          maxResults: args.maxResults || 10,
-          singleEvents: true,
-          orderBy: 'startTime',
-          q: args.query || undefined
-        });
-        
-        const events = (response.data.items || []).map(event => ({
-          id: event.id,
-          summary: event.summary || '(No title)',
-          description: event.description || '',
-          start: event.start.dateTime || event.start.date,
-          end: event.end.dateTime || event.end.date,
-          location: event.location || '',
-          attendees: (event.attendees || []).map(a => a.email),
-          htmlLink: event.htmlLink,
-          isAllDay: !event.start.dateTime
-        }));
-        
-        return {
-          success: true,
-          events,
-          count: events.length,
-          timeRange: { from: timeMin, to: timeMax }
-        };
+        return await calendarService.getEvents(args.timeMin, args.timeMax, args.maxResults, args.query);
       }
-      
+
       case 'createCalendarEvent': {
-        const { summary, description, startTime, endTime, attendees, location } = args;
-        const event = {
-          summary: summary,
-          description: description || '',
-          location: location || '',
-          start: { dateTime: startTime },
-          end: { dateTime: endTime }
-        };
-        
-        if (attendees && attendees.length > 0) {
-          event.attendees = attendees.map(email => ({ email }));
-        }
-        
-        const response = await calendar.events.insert({
-          calendarId: 'primary',
-          requestBody: event,
-          sendUpdates: attendees ? 'all' : 'none'
-        });
-        
-        return {
-          success: true,
-          event: {
-            id: response.data.id,
-            summary: response.data.summary,
-            start: response.data.start.dateTime || response.data.start.date,
-            end: response.data.end.dateTime || response.data.end.date,
-            htmlLink: response.data.htmlLink,
-            attendees: attendees || []
-          },
-          message: 'Event created successfully!'
-        };
+        return await calendarService.createEvent(args);
       }
 
       // === DRIVE TOOLS ===
       case 'searchDriveFiles': {
-        const maxResults = Math.min(args.maxResults || 10, 25);
-        let query = `name contains '${args.query}' or fullText contains '${args.query}'`;
-        
-        if (args.fileType && args.fileType !== 'any') {
-          const mimeType = FILE_TYPE_MAP[args.fileType];
-          if (mimeType) {
-            if (args.fileType === 'image') {
-              query += ` and mimeType contains 'image/'`;
-            } else {
-              query += ` and mimeType = '${mimeType}'`;
-            }
-          }
-        }
-        
-        query += ' and trashed = false';
-        
-        const response = await drive.files.list({
-          q: query,
-          pageSize: maxResults,
-          fields: 'files(id, name, mimeType, modifiedTime, webViewLink, iconLink, size, owners)',
-          orderBy: 'modifiedTime desc'
-        });
-        
-        const files = (response.data.files || []).map(file => ({
-          id: file.id,
-          name: file.name,
-          mimeType: file.mimeType,
-          icon: getFileIcon(file.mimeType),
-          modifiedTime: file.modifiedTime,
-          webViewLink: file.webViewLink,
-          size: file.size,
-          owner: file.owners?.[0]?.emailAddress || 'Unknown'
-        }));
-        
-        return {
-          success: true,
-          files,
-          count: files.length,
-          query: args.query
-        };
+        return await driveService.searchFiles(args.query, args.fileType, args.maxResults);
       }
-      
+
       case 'getRecentDriveFiles': {
-        const maxResults = Math.min(args.maxResults || 10, 25);
-        let query = 'trashed = false';
-        
-        if (args.fileType && args.fileType !== 'any') {
-          const mimeType = FILE_TYPE_MAP[args.fileType];
-          if (mimeType) {
-            if (args.fileType === 'image') {
-              query += ` and mimeType contains 'image/'`;
-            } else {
-              query += ` and mimeType = '${mimeType}'`;
-            }
-          }
-        }
-        
-        const response = await drive.files.list({
-          q: query,
-          pageSize: maxResults,
-          fields: 'files(id, name, mimeType, modifiedTime, webViewLink, iconLink, size, owners)',
-          orderBy: 'modifiedTime desc'
-        });
-        
-        const files = (response.data.files || []).map(file => ({
-          id: file.id,
-          name: file.name,
-          mimeType: file.mimeType,
-          icon: getFileIcon(file.mimeType),
-          modifiedTime: file.modifiedTime,
-          webViewLink: file.webViewLink,
-          size: file.size,
-          owner: file.owners?.[0]?.emailAddress || 'Unknown'
-        }));
-        
-        return {
-          success: true,
-          files,
-          count: files.length
-        };
+        return await driveService.getRecentFiles(args.maxResults, args.fileType);
       }
-      
+
       case 'getDriveFileContent': {
-        const fileMeta = await drive.files.get({
-          fileId: args.fileId,
-          fields: 'id, name, mimeType, webViewLink'
-        });
-        
-        const mimeType = fileMeta.data.mimeType;
-        let content = '';
-        
-        if (mimeType === 'application/vnd.google-apps.document') {
-          const doc = await docs.documents.get({
-            documentId: args.fileId
-          });
-          
-          const extractText = (content) => {
-            let text = '';
-            if (content.content) {
-              for (const element of content.content) {
-                if (element.paragraph) {
-                  for (const elem of element.paragraph.elements || []) {
-                    if (elem.textRun) {
-                      text += elem.textRun.content;
-                    }
-                  }
-                }
-              }
-            }
-            return text;
-          };
-          
-          content = extractText(doc.data.body);
-        }
-        else if (mimeType === 'application/vnd.google-apps.spreadsheet') {
-          const response = await drive.files.export({
-            fileId: args.fileId,
-            mimeType: 'text/csv'
-          });
-          content = response.data;
-        }
-        else if (mimeType === 'application/vnd.google-apps.presentation') {
-          const response = await drive.files.export({
-            fileId: args.fileId,
-            mimeType: 'text/plain'
-          });
-          content = response.data;
-        }
-        else {
-          try {
-            const response = await drive.files.get({
-              fileId: args.fileId,
-              alt: 'media'
-            });
-            content = typeof response.data === 'string' ? response.data : JSON.stringify(response.data);
-          } catch (e) {
-            content = '[Unable to read file content. File may be binary or too large.]';
-          }
-        }
-        
-        return {
-          success: true,
-          file: {
-            id: fileMeta.data.id,
-            name: fileMeta.data.name,
-            mimeType: fileMeta.data.mimeType,
-            icon: getFileIcon(fileMeta.data.mimeType),
-            webViewLink: fileMeta.data.webViewLink,
-            content: content.slice(0, 10000)
-          }
-        };
+        return await driveService.getFileContent(args.fileId);
       }
-      
+
       case 'createDriveDocument': {
-        const doc = await docs.documents.create({
-          requestBody: {
-            title: args.title
-          }
-        });
-        
-        if (args.content) {
-          await docs.documents.batchUpdate({
-            documentId: doc.data.documentId,
-            requestBody: {
-              requests: [{
-                insertText: {
-                  location: { index: 1 },
-                  text: args.content
-                }
-              }]
-            }
-          });
-        }
-        
-        const fileMeta = await drive.files.get({
-          fileId: doc.data.documentId,
-          fields: 'webViewLink'
-        });
-        
-        return {
-          success: true,
-          document: {
-            id: doc.data.documentId,
-            title: doc.data.title,
-            webViewLink: fileMeta.data.webViewLink,
-            hasContent: !!args.content
-          },
-          message: `Document "${args.title}" created successfully!`
-        };
+        return await driveService.createDocument(args.title, args.content);
       }
-      
-      default: 
+
+      default:
         return { success: false, error: `Unknown tool: ${toolName}` };
     }
   } catch (error) {
@@ -448,7 +82,7 @@ router.post('/chat', isAuthenticated, async (req, res) => {
   res.setHeader('Connection', 'keep-alive');
 
   try {
-    const model = genAI.getGenerativeModel({ 
+    const model = genAI.getGenerativeModel({
       model: "gemini-2.0-flash",
       systemInstruction: ORCHESTRATOR_SYSTEM_PROMPT,
       tools: [{ functionDeclarations: toolDefinitions }]
@@ -460,7 +94,7 @@ router.post('/chat', isAuthenticated, async (req, res) => {
 
     let loopCount = 0;
     const maxLoops = 5;
-    
+
     while (response.functionCalls() && response.functionCalls().length > 0 && loopCount < maxLoops) {
       loopCount++;
       const calls = response.functionCalls();
@@ -468,15 +102,15 @@ router.post('/chat', isAuthenticated, async (req, res) => {
 
       for (const call of calls) {
         console.log(`Tool Call: ${call.name}`);
-        
-        res.write(`data: ${JSON.stringify({ 
+
+        res.write(`data: ${JSON.stringify({
           type: 'tool_call',
           toolCall: { name: call.name, args: call.args }
         })}\n\n`);
-        
+
         const toolResult = await executeTool(call.name, call.args, req.session);
-        
-        res.write(`data: ${JSON.stringify({ 
+
+        res.write(`data: ${JSON.stringify({
           type: 'tool_result',
           toolResult: {
             name: call.name,
@@ -499,11 +133,11 @@ router.post('/chat', isAuthenticated, async (req, res) => {
           functionResponse: { name: call.name, response: toolResult }
         });
       }
-      
+
       result = await chat.sendMessage(functionResponses);
       response = result.response;
     }
-    
+
     const text = response.text();
     res.write(`data: ${JSON.stringify({ type: 'text', text })}\n\n`);
     res.write('data: [DONE]\n\n');

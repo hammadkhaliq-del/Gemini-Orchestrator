@@ -11,7 +11,7 @@ export const AuthProvider = ({ children }) => {
     const checkAuth = async () => {
       try {
         // Note: We need credentials: 'include' to send the session cookie
-        const res = await fetch('http://localhost:5000/auth/user', {
+        const res = await fetch(`${import.meta.env.VITE_API_URL}/auth/user`, {
           credentials: 'include',
         });
         const data = await res.json();
@@ -29,11 +29,11 @@ export const AuthProvider = ({ children }) => {
 
   const login = () => {
     // Redirect browser to backend auth route
-    window.location.href = 'http://localhost:5000/auth/google';
+    window.location.href = `${import.meta.env.VITE_API_URL}/auth/google`;
   };
 
   const logout = async () => {
-    await fetch('http://localhost:5000/auth/logout', { method: 'POST', credentials: 'include' });
+    await fetch(`${import.meta.env.VITE_API_URL}/auth/logout`, { method: 'POST', credentials: 'include' });
     setUser(null);
   };
 
