@@ -36,15 +36,41 @@ function extractEmailBody(payload) {
   return body;
 }
 
+// Map file types to MIME types for Drive queries
+const FILE_TYPE_MAP = {
+  document: "application/vnd.google-apps.document",
+  spreadsheet: "application/vnd.google-apps.spreadsheet",
+  presentation: "application/vnd.google-apps.presentation",
+  pdf: "application/pdf",
+  image: "image/",
+  folder: "application/vnd.google-apps.folder"
+};
+
+// Get file icon based on MIME type
+function getFileIcon(mimeType) {
+  if (mimeType?.includes('document')) return '📄';
+  if (mimeType?.includes('spreadsheet')) return '📊';
+  if (mimeType?.includes('presentation')) return '📽️';
+  if (mimeType?.includes('pdf')) return '📕';
+  if (mimeType?.includes('image')) return '🖼️';
+  if (mimeType?.includes('folder')) return '📁';
+  if (mimeType?.includes('video')) return '🎬';
+  if (mimeType?.includes('audio')) return '🎵';
+  return '📎';
+}
+
 async function executeTool(toolName, args, session) {
   oauth2Client.setCredentials(session.tokens);
   const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
   const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+  const drive = google.drive({ version: 'v3', auth: oauth2Client });
+  const docs = google.docs({ version: 'v1', auth: oauth2Client });
   
   console.log(`Executing tool: ${toolName} with args: `, args);
   
   try {
     switch (toolName) {
+      // === EMAIL TOOLS ===
       case 'searchEmails': {
         const maxResults = Math.min(args.maxResults || 5, 10);
         const listResponse = await gmail.users.messages.list({
@@ -140,6 +166,7 @@ async function executeTool(toolName, args, session) {
         };
       }
       
+      // === CALENDAR TOOLS ===
       case 'getCalendarEvents': {
         const now = new Date();
         const timeMin = args.timeMin || now.toISOString();
@@ -208,6 +235,199 @@ async function executeTool(toolName, args, session) {
           message: 'Event created successfully!'
         };
       }
+
+      // === DRIVE TOOLS ===
+      case 'searchDriveFiles': {
+        const maxResults = Math.min(args.maxResults || 10, 25);
+        let query = `name contains '${args.query}' or fullText contains '${args.query}'`;
+        
+        if (args.fileType && args.fileType !== 'any') {
+          const mimeType = FILE_TYPE_MAP[args.fileType];
+          if (mimeType) {
+            if (args.fileType === 'image') {
+              query += ` and mimeType contains 'image/'`;
+            } else {
+              query += ` and mimeType = '${mimeType}'`;
+            }
+          }
+        }
+        
+        query += ' and trashed = false';
+        
+        const response = await drive.files.list({
+          q: query,
+          pageSize: maxResults,
+          fields: 'files(id, name, mimeType, modifiedTime, webViewLink, iconLink, size, owners)',
+          orderBy: 'modifiedTime desc'
+        });
+        
+        const files = (response.data.files || []).map(file => ({
+          id: file.id,
+          name: file.name,
+          mimeType: file.mimeType,
+          icon: getFileIcon(file.mimeType),
+          modifiedTime: file.modifiedTime,
+          webViewLink: file.webViewLink,
+          size: file.size,
+          owner: file.owners?.[0]?.emailAddress || 'Unknown'
+        }));
+        
+        return {
+          success: true,
+          files,
+          count: files.length,
+          query: args.query
+        };
+      }
+      
+      case 'getRecentDriveFiles': {
+        const maxResults = Math.min(args.maxResults || 10, 25);
+        let query = 'trashed = false';
+        
+        if (args.fileType && args.fileType !== 'any') {
+          const mimeType = FILE_TYPE_MAP[args.fileType];
+          if (mimeType) {
+            if (args.fileType === 'image') {
+              query += ` and mimeType contains 'image/'`;
+            } else {
+              query += ` and mimeType = '${mimeType}'`;
+            }
+          }
+        }
+        
+        const response = await drive.files.list({
+          q: query,
+          pageSize: maxResults,
+          fields: 'files(id, name, mimeType, modifiedTime, webViewLink, iconLink, size, owners)',
+          orderBy: 'modifiedTime desc'
+        });
+        
+        const files = (response.data.files || []).map(file => ({
+          id: file.id,
+          name: file.name,
+          mimeType: file.mimeType,
+          icon: getFileIcon(file.mimeType),
+          modifiedTime: file.modifiedTime,
+          webViewLink: file.webViewLink,
+          size: file.size,
+          owner: file.owners?.[0]?.emailAddress || 'Unknown'
+        }));
+        
+        return {
+          success: true,
+          files,
+          count: files.length
+        };
+      }
+      
+      case 'getDriveFileContent': {
+        const fileMeta = await drive.files.get({
+          fileId: args.fileId,
+          fields: 'id, name, mimeType, webViewLink'
+        });
+        
+        const mimeType = fileMeta.data.mimeType;
+        let content = '';
+        
+        if (mimeType === 'application/vnd.google-apps.document') {
+          const doc = await docs.documents.get({
+            documentId: args.fileId
+          });
+          
+          const extractText = (content) => {
+            let text = '';
+            if (content.content) {
+              for (const element of content.content) {
+                if (element.paragraph) {
+                  for (const elem of element.paragraph.elements || []) {
+                    if (elem.textRun) {
+                      text += elem.textRun.content;
+                    }
+                  }
+                }
+              }
+            }
+            return text;
+          };
+          
+          content = extractText(doc.data.body);
+        }
+        else if (mimeType === 'application/vnd.google-apps.spreadsheet') {
+          const response = await drive.files.export({
+            fileId: args.fileId,
+            mimeType: 'text/csv'
+          });
+          content = response.data;
+        }
+        else if (mimeType === 'application/vnd.google-apps.presentation') {
+          const response = await drive.files.export({
+            fileId: args.fileId,
+            mimeType: 'text/plain'
+          });
+          content = response.data;
+        }
+        else {
+          try {
+            const response = await drive.files.get({
+              fileId: args.fileId,
+              alt: 'media'
+            });
+            content = typeof response.data === 'string' ? response.data : JSON.stringify(response.data);
+          } catch (e) {
+            content = '[Unable to read file content. File may be binary or too large.]';
+          }
+        }
+        
+        return {
+          success: true,
+          file: {
+            id: fileMeta.data.id,
+            name: fileMeta.data.name,
+            mimeType: fileMeta.data.mimeType,
+            icon: getFileIcon(fileMeta.data.mimeType),
+            webViewLink: fileMeta.data.webViewLink,
+            content: content.slice(0, 10000)
+          }
+        };
+      }
+      
+      case 'createDriveDocument': {
+        const doc = await docs.documents.create({
+          requestBody: {
+            title: args.title
+          }
+        });
+        
+        if (args.content) {
+          await docs.documents.batchUpdate({
+            documentId: doc.data.documentId,
+            requestBody: {
+              requests: [{
+                insertText: {
+                  location: { index: 1 },
+                  text: args.content
+                }
+              }]
+            }
+          });
+        }
+        
+        const fileMeta = await drive.files.get({
+          fileId: doc.data.documentId,
+          fields: 'webViewLink'
+        });
+        
+        return {
+          success: true,
+          document: {
+            id: doc.data.documentId,
+            title: doc.data.title,
+            webViewLink: fileMeta.data.webViewLink,
+            hasContent: !!args.content
+          },
+          message: `Document "${args.title}" created successfully!`
+        };
+      }
       
       default: 
         return { success: false, error: `Unknown tool: ${toolName}` };
@@ -217,6 +437,8 @@ async function executeTool(toolName, args, session) {
     return { success: false, error: `Failed to execute ${toolName}: ${error.message}` };
   }
 }
+
+
 
 router.post('/chat', isAuthenticated, async (req, res) => {
   const { message, history } = req.body;
@@ -239,7 +461,6 @@ router.post('/chat', isAuthenticated, async (req, res) => {
     let loopCount = 0;
     const maxLoops = 5;
     
-    // Gemini can call multiple tools at once, so we loop through functionCalls()
     while (response.functionCalls() && response.functionCalls().length > 0 && loopCount < maxLoops) {
       loopCount++;
       const calls = response.functionCalls();
@@ -262,11 +483,15 @@ router.post('/chat', isAuthenticated, async (req, res) => {
             success: toolResult.success,
             emailCount: toolResult.emails?.length || (toolResult.email ? 1 : 0),
             eventCount: toolResult.events?.length || (toolResult.event ? 1 : 0),
+            fileCount: toolResult.files?.length || (toolResult.file ? 1 : 0),
             emails: toolResult.emails || null,
             email: toolResult.email || null,
             draft: toolResult.draft || null,
             events: toolResult.events || null,
-            event: toolResult.event || null
+            event: toolResult.event || null,
+            files: toolResult.files || null,
+            file: toolResult.file || null,
+            document: toolResult.document || null
           }
         })}\n\n`);
 
@@ -275,7 +500,6 @@ router.post('/chat', isAuthenticated, async (req, res) => {
         });
       }
       
-      // Send all tool results back to Gemini to continue the conversation
       result = await chat.sendMessage(functionResponses);
       response = result.response;
     }

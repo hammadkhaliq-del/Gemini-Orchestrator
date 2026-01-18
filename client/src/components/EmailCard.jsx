@@ -1,5 +1,7 @@
 import { useState } from 'react';
 
+// ==================== HELPER FUNCTIONS ====================
+
 // Format date to readable string
 function formatDate(dateString) {
   if (!dateString) return '';
@@ -56,6 +58,37 @@ function getAvatarColor(name) {
   return colors[Math.abs(hash) % colors.length];
 }
 
+// Format file size
+function formatFileSize(bytes) {
+  if (!bytes) return '';
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${sizes[i]}`;
+}
+
+// Format relative time
+function formatRelativeTime(dateString) {
+  if (!dateString) return '';
+  try {
+    const date = new Date(dateString);
+    const now = new Date();
+    const diffMs = now - date;
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
+    
+    if (diffMins < 1) return 'Just now';
+    if (diffMins < 60) return `${diffMins}m ago`;
+    if (diffHours < 24) return `${diffHours}h ago`;
+    if (diffDays < 7) return `${diffDays}d ago`;
+    return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  } catch {
+    return dateString;
+  }
+}
+
+// ==================== EMAIL COMPONENTS ====================
+
 // Single Email Card
 export function EmailCard({ email, onReadMore, compact = false }) {
   const name = extractName(email.from);
@@ -84,6 +117,7 @@ export function EmailCard({ email, onReadMore, compact = false }) {
   
   return (
     <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow">
+      {/* Header */}
       <div className="flex items-start gap-3 mb-3">
         <div className={`w-10 h-10 rounded-full ${avatarColor} flex items-center justify-center text-white font-medium flex-shrink-0`}>
           {initials}
@@ -97,14 +131,17 @@ export function EmailCard({ email, onReadMore, compact = false }) {
         </div>
       </div>
       
+      {/* Subject */}
       <h3 className="font-medium text-gray-900 mb-2 line-clamp-2">
         {email.subject || '(No Subject)'}
       </h3>
       
+      {/* Snippet/Body Preview */}
       <p className="text-sm text-gray-600 line-clamp-3 mb-3">
         {email.snippet || email.body?.slice(0, 200)}
       </p>
       
+      {/* Actions */}
       {onReadMore && (
         <div className="flex items-center gap-2 pt-2 border-t border-gray-100">
           <button 
@@ -134,6 +171,7 @@ export function EmailList({ emails, onReadMore, title }) {
   
   return (
     <div className="space-y-3">
+      {/* Header */}
       <div className="flex items-center justify-between">
         <h3 className="font-medium text-gray-700 flex items-center gap-2">
           📧 {title || `Found ${emails.length} email${emails.length !== 1 ? 's' : ''}`}
@@ -156,6 +194,7 @@ export function EmailList({ emails, onReadMore, title }) {
         </div>
       </div>
       
+      {/* Email Grid/List */}
       {viewMode === 'cards' ? (
         <div className="grid gap-3 md:grid-cols-2">
           {emails.map((email, idx) => (
@@ -183,6 +222,7 @@ export function FullEmailView({ email, onClose }) {
   
   return (
     <div className="bg-white rounded-xl border border-gray-200 shadow-lg overflow-hidden">
+      {/* Header */}
       <div className="bg-gray-50 p-4 border-b border-gray-200">
         <div className="flex items-start justify-between">
           <div className="flex items-start gap-3">
@@ -205,6 +245,7 @@ export function FullEmailView({ email, onClose }) {
         <h1 className="font-bold text-lg text-gray-900 mt-3">{email.subject || '(No Subject)'}</h1>
       </div>
       
+      {/* Body */}
       <div className="p-4">
         <div className="prose prose-sm max-w-none text-gray-700 whitespace-pre-wrap">
           {email.body || email.snippet}
@@ -230,6 +271,184 @@ export function DraftCard({ draft }) {
           <p className="text-sm text-green-700">Subject: {draft.subject}</p>
           <p className="text-xs text-green-600 mt-2 italic">"{draft.bodyPreview}"</p>
           <p className="text-xs text-green-600 mt-2">📝 Find it in your Gmail Drafts folder</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ==================== DRIVE FILE COMPONENTS ====================
+
+// Single File Card
+export function FileCard({ file, onReadContent, compact = false }) {
+  const handleClick = () => {
+    if (file.webViewLink) {
+      window.open(file.webViewLink, '_blank');
+    }
+  };
+
+  if (compact) {
+    return (
+      <div 
+        className="flex items-center gap-3 p-2 hover:bg-gray-50 rounded-lg cursor-pointer transition-colors"
+        onClick={handleClick}
+      >
+        <span className="text-2xl">{file.icon || '📎'}</span>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-medium text-sm text-gray-900 truncate">{file.name}</span>
+            <span className="text-xs text-gray-400 whitespace-nowrap">{formatRelativeTime(file.modifiedTime)}</span>
+          </div>
+          <p className="text-xs text-gray-500">{formatFileSize(file.size)}</p>
+        </div>
+      </div>
+    );
+  }
+  
+  return (
+    <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow">
+      <div className="flex items-start gap-3">
+        <span className="text-3xl">{file.icon || '📎'}</span>
+        <div className="flex-1 min-w-0">
+          <h3 className="font-medium text-gray-900 truncate">{file.name}</h3>
+          <p className="text-xs text-gray-500 mt-1">
+            Modified {formatRelativeTime(file.modifiedTime)}
+            {file.size && ` • ${formatFileSize(file.size)}`}
+          </p>
+        </div>
+      </div>
+      
+      <div className="flex items-center gap-2 mt-3 pt-2 border-t border-gray-100">
+        <button 
+          onClick={handleClick}
+          className="text-xs text-blue-600 hover:text-blue-800 font-medium flex items-center gap-1"
+        >
+          🔗 Open in Drive
+        </button>
+        {onReadContent && file.mimeType?.includes('document') && (
+          <>
+            <span className="text-xs text-gray-300">•</span>
+            <button 
+              onClick={(e) => { e.stopPropagation(); onReadContent(file.id); }}
+              className="text-xs text-green-600 hover:text-green-800 font-medium flex items-center gap-1"
+            >
+              📖 Read content
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// File List Container
+export function FileList({ files, onReadContent, title }) {
+  const [viewMode, setViewMode] = useState('cards');
+  
+  if (!files || files.length === 0) {
+    return (
+      <div className="bg-gray-50 rounded-xl p-6 text-center">
+        <span className="text-4xl mb-2 block">📂</span>
+        <p className="text-gray-500">No files found</p>
+      </div>
+    );
+  }
+  
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <h3 className="font-medium text-gray-700 flex items-center gap-2">
+          📁 {title || `Found ${files.length} file${files.length !== 1 ? 's' : ''}`}
+        </h3>
+        <div className="flex gap-1">
+          <button 
+            onClick={() => setViewMode('cards')}
+            className={`p-1.5 rounded ${viewMode === 'cards' ? 'bg-blue-100 text-blue-600' : 'text-gray-400 hover:text-gray-600'}`}
+          >
+            ▦
+          </button>
+          <button 
+            onClick={() => setViewMode('compact')}
+            className={`p-1.5 rounded ${viewMode === 'compact' ? 'bg-blue-100 text-blue-600' : 'text-gray-400 hover:text-gray-600'}`}
+          >
+            ≡
+          </button>
+        </div>
+      </div>
+      
+      {viewMode === 'cards' ? (
+        <div className="grid gap-3 md:grid-cols-2">
+          {files.map((file, idx) => (
+            <FileCard key={file.id || idx} file={file} onReadContent={onReadContent} />
+          ))}
+        </div>
+      ) : (
+        <div className="bg-white rounded-xl border border-gray-200 divide-y divide-gray-100">
+          {files.map((file, idx) => (
+            <FileCard key={file.id || idx} file={file} onReadContent={onReadContent} compact />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// File Content View
+export function FileContentView({ file, onClose }) {
+  if (!file) return null;
+  
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 shadow-lg overflow-hidden">
+      <div className="bg-gray-50 p-4 border-b border-gray-200 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <span className="text-2xl">{file.icon || '📄'}</span>
+          <div>
+            <h2 className="font-semibold text-gray-900">{file.name}</h2>
+            <a 
+              href={file.webViewLink} 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="text-xs text-blue-600 hover:underline"
+            >
+              Open in Drive →
+            </a>
+          </div>
+        </div>
+        {onClose && (
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">✕</button>
+        )}
+      </div>
+      
+      <div className="p-4 max-h-96 overflow-y-auto">
+        <pre className="text-sm text-gray-700 whitespace-pre-wrap font-sans">
+          {file.content || 'No content available'}
+        </pre>
+      </div>
+    </div>
+  );
+}
+
+// Document Created Card
+export function DocumentCard({ document }) {
+  if (!document) return null;
+  
+  return (
+    <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+      <div className="flex items-start gap-3">
+        <div className="w-10 h-10 rounded-full bg-blue-500 flex items-center justify-center text-white text-xl">
+          📄
+        </div>
+        <div className="flex-1">
+          <h3 className="font-semibold text-blue-800">Document Created!</h3>
+          <p className="text-sm text-blue-700 mt-1">{document.title}</p>
+          <a 
+            href={document.webViewLink} 
+            target="_blank" 
+            rel="noopener noreferrer"
+            className="inline-block mt-2 text-xs text-blue-600 hover:text-blue-800 font-medium"
+          >
+            🔗 Open in Google Docs →
+          </a>
         </div>
       </div>
     </div>

@@ -108,13 +108,90 @@ const toolDefinitions = [
       },
       required: ["summary", "startTime", "endTime"]
     }
+  },
+
+  // === DRIVE TOOLS ===
+  {
+    name: "searchDriveFiles",
+    description: "Search for files in the user's Google Drive. Use this to find documents, spreadsheets, presentations, PDFs, or any files.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "Search query. Can be file name, content keywords, or use Drive query syntax like 'name contains invoice'"
+        },
+        fileType: {
+          type: "string",
+          enum: ["document", "spreadsheet", "presentation", "pdf", "image", "folder", "any"],
+          description: "Filter by file type (optional, defaults to 'any')"
+        },
+        maxResults: {
+          type: "number",
+          description: "Maximum files to return (default: 10, max: 25)"
+        }
+      },
+      required: ["query"]
+    }
+  },
+  {
+    name: "getRecentDriveFiles",
+    description: "Get recently modified or accessed files from Google Drive. Use this when user asks about recent files or what they've been working on.",
+    parameters: {
+      type: "object",
+      properties: {
+        maxResults: {
+          type: "number",
+          description: "Maximum files to return (default: 10, max: 25)"
+        },
+        fileType: {
+          type: "string",
+          enum: ["document", "spreadsheet", "presentation", "pdf", "image", "folder", "any"],
+          description: "Filter by file type (optional)"
+        }
+      },
+      required: []
+    }
+  },
+  {
+    name: "getDriveFileContent",
+    description: "Get the content/text of a Google Doc, Sheet, or other readable file. Use this to read document contents.",
+    parameters: {
+      type: "object",
+      properties: {
+        fileId: {
+          type: "string",
+          description: "The ID of the file to read"
+        }
+      },
+      required: ["fileId"]
+    }
+  },
+  {
+    name: "createDriveDocument",
+    description: "Create a new Google Doc in the user's Drive. Use this when user asks to create a document or write something to a new file.",
+    parameters: {
+      type: "object",
+      properties: {
+        title: {
+          type: "string",
+          description: "Document title"
+        },
+        content: {
+          type: "string",
+          description: "Initial text content for the document"
+        }
+      },
+      required: ["title"]
+    }
   }
 ];
 
-const ORCHESTRATOR_SYSTEM_PROMPT = `You are Gemini Orchestrator — an intelligent AI assistant that manages the user's Gmail and Google Calendar. 
+const ORCHESTRATOR_SYSTEM_PROMPT = `You are Gemini Orchestrator — an intelligent AI assistant that manages the user's Gmail, Google Calendar, and Google Drive. 
 
 ## YOUR CAPABILITIES
-### Email
+
+### Email (Gmail)
 - Search emails using searchEmails
 - Read full email content using readEmail  
 - Draft replies using draftReply (creates drafts, does NOT send)
@@ -124,24 +201,31 @@ const ORCHESTRATOR_SYSTEM_PROMPT = `You are Gemini Orchestrator — an intellige
 - Create new events using createCalendarEvent
 - Check availability and suggest meeting times
 
+### Drive
+- Search files using searchDriveFiles
+- Get recent files using getRecentDriveFiles
+- Read document content using getDriveFileContent
+- Create new documents using createDriveDocument
+
 ## RULES
-1. ALWAYS use tools to access real data — never hallucinate
+1. ALWAYS use tools to access real data — never hallucinate content
 2. For Gmail searches, convert natural language to Gmail syntax: 
    - "unread emails" → "is:unread"
    - "emails from John" → "from:john"
    - "emails this week" → "newer_than:7d"
 3. For Calendar: 
    - Use ISO 8601 format for dates/times
-   - When user says "tomorrow", calculate the actual date
-   - When user says "2pm", include timezone context
-   - Current date context will be provided
-4. Never claim to send emails — you only create drafts
-5. Ask clarifying questions if intent is unclear
+   - Calculate actual dates for "tomorrow", "next week", etc.
+4. For Drive:
+   - When searching, try to infer the file type from context
+   - "find the budget spreadsheet" → fileType: "spreadsheet"
+   - "my presentation about marketing" → fileType: "presentation"
+5. Never claim to send emails — you only create drafts
+6. Ask clarifying questions if intent is unclear
 
 ## DATE HANDLING
 Today is: ${new Date().toISOString().split('T')[0]}
 Current time: ${new Date().toLocaleTimeString()}
-Timezone: User's local time (assume their system timezone)
 
 When user says relative dates: 
 - "today" = ${new Date().toISOString().split('T')[0]}
@@ -152,6 +236,7 @@ When user says relative dates:
 - Be helpful and conversational
 - Use markdown formatting
 - For multiple items, use bullet points
+- Include file links when showing Drive results
 - Offer follow-up actions
 `;
 

@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { EmailList, FullEmailView, DraftCard } from './EmailCard';
+import { EmailList, FullEmailView, DraftCard, FileList, FileContentView, DocumentCard } from './EmailCard';
 
 // Tool Activity Indicator Component
 function ToolIndicator({ toolCall, toolResult }) {
@@ -9,7 +9,11 @@ function ToolIndicator({ toolCall, toolResult }) {
     readEmail: '📧',
     draftReply: '✍️',
     getCalendarEvents: '📅',
-    createCalendarEvent: '📆'
+    createCalendarEvent: '📆',
+    searchDriveFiles: '🔎',
+    getRecentDriveFiles: '📂',
+    getDriveFileContent: '📄',
+    createDriveDocument: '📝'
   };
   
   const toolLabels = {
@@ -17,7 +21,11 @@ function ToolIndicator({ toolCall, toolResult }) {
     readEmail: 'Reading email',
     draftReply: 'Creating draft',
     getCalendarEvents: 'Checking calendar',
-    createCalendarEvent: 'Creating event'
+    createCalendarEvent: 'Creating event',
+    searchDriveFiles: 'Searching Drive',
+    getRecentDriveFiles: 'Getting recent files',
+    getDriveFileContent: 'Reading file',
+    createDriveDocument: 'Creating document'
   };
 
   if (toolResult) {
@@ -26,7 +34,11 @@ function ToolIndicator({ toolCall, toolResult }) {
       readEmail: 'Email loaded',
       draftReply: 'Draft created',
       getCalendarEvents: `Found ${toolResult.eventCount || 0} event(s)`,
-      createCalendarEvent: 'Event created'
+      createCalendarEvent: 'Event created',
+      searchDriveFiles: `Found ${toolResult.fileCount || 0} file(s)`,
+      getRecentDriveFiles: `Found ${toolResult.fileCount || 0} file(s)`,
+      getDriveFileContent: 'File loaded',
+      createDriveDocument: 'Document created'
     };
     
     return (
@@ -48,25 +60,15 @@ function ToolIndicator({ toolCall, toolResult }) {
 // Simple Markdown-like text formatter
 function FormattedText({ text }) {
   if (!text) return null;
-  
-  // Split into lines and process
   const lines = text.split('\n');
   
   return (
     <div className="space-y-2">
       {lines.map((line, idx) => {
-        // Headers
-        if (line.startsWith('### ')) {
-          return <h4 key={idx} className="font-semibold text-gray-900 mt-2">{line.slice(4)}</h4>;
-        }
-        if (line.startsWith('## ')) {
-          return <h3 key={idx} className="font-bold text-gray-900 mt-3">{line.slice(3)}</h3>;
-        }
-        if (line.startsWith('# ')) {
-          return <h2 key={idx} className="font-bold text-lg text-gray-900 mt-3">{line.slice(2)}</h2>;
-        }
+        if (line.startsWith('### ')) return <h4 key={idx} className="font-semibold text-gray-900 mt-2">{line.slice(4)}</h4>;
+        if (line.startsWith('## ')) return <h3 key={idx} className="font-bold text-gray-900 mt-3">{line.slice(3)}</h3>;
+        if (line.startsWith('# ')) return <h2 key={idx} className="font-bold text-lg text-gray-900 mt-3">{line.slice(2)}</h2>;
         
-        // Bullet points
         if (line.startsWith('- ') || line.startsWith('• ')) {
           return (
             <div key={idx} className="flex gap-2 ml-2">
@@ -76,7 +78,6 @@ function FormattedText({ text }) {
           );
         }
         
-        // Numbered lists
         const numberedMatch = line.match(/^(\d+)\.\s(.+)/);
         if (numberedMatch) {
           return (
@@ -87,21 +88,14 @@ function FormattedText({ text }) {
           );
         }
         
-        // Empty lines
-        if (line.trim() === '') {
-          return <div key={idx} className="h-2" />;
-        }
-        
-        // Regular paragraph
+        if (line.trim() === '') return <div key={idx} className="h-2" />;
         return <p key={idx}>{formatInlineText(line)}</p>;
       })}
     </div>
   );
 }
 
-// Format inline text (bold, italic, code)
 function formatInlineText(text) {
-  // Simple bold: **text**
   const parts = text.split(/(\*\*[^*]+\*\*)/g);
   return parts.map((part, i) => {
     if (part.startsWith('**') && part.endsWith('**')) {
@@ -125,9 +119,12 @@ export default function Chat() {
   };
   useEffect(scrollToBottom, [messages, currentTool]);
 
-  // Handle "Read More" click on email cards
   const handleReadEmail = (emailId) => {
     setInput(`Read the full content of email with ID: ${emailId}`);
+  };
+
+  const handleReadFile = (fileId) => {
+    setInput(`Read the content of file with ID: ${fileId}`);
   };
 
   const handleSubmit = async (e) => {
@@ -156,17 +153,18 @@ export default function Chat() {
       });
 
       if (response.status === 401) {
-        const data = await response.json();
-        if (data.needsReauth) {
-          alert('Session expired. Please login again.');
-          logout();
-          return;
-        }
+        alert('Session expired. Please login again.');
+        logout();
+        return;
       }
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
-      let assistantMessage = { role: 'model', text: '', emails: null, email: null, draft: null };
+      let assistantMessage = { 
+        role: 'model', text: '', 
+        emails: null, email: null, draft: null,
+        files: null, file: null, document: null
+      };
       let hasAddedMessage = false;
 
       while (true) {
@@ -196,16 +194,12 @@ export default function Chat() {
               if (data.type === 'tool_result') {
                 setToolResult(data.toolResult);
                 
-                // Store data for rendering
-                if (data.toolResult.emails) {
-                  assistantMessage.emails = data.toolResult.emails;
-                }
-                if (data.toolResult.email) {
-                  assistantMessage.email = data.toolResult.email;
-                }
-                if (data.toolResult.draft) {
-                  assistantMessage.draft = data.toolResult.draft;
-                }
+                if (data.toolResult.emails) assistantMessage.emails = data.toolResult.emails;
+                if (data.toolResult.email) assistantMessage.email = data.toolResult.email;
+                if (data.toolResult.draft) assistantMessage.draft = data.toolResult.draft;
+                if (data.toolResult.files) assistantMessage.files = data.toolResult.files;
+                if (data.toolResult.file) assistantMessage.file = data.toolResult.file;
+                if (data.toolResult.document) assistantMessage.document = data.toolResult.document;
               }
               
               if (data.type === 'text' && data.text) {
@@ -226,7 +220,6 @@ export default function Chat() {
               }
               
               if (data.type === 'error') {
-                console.error('Stream error:', data.error);
                 assistantMessage.text = `Sorry, an error occurred: ${data.error}`;
                 if (!hasAddedMessage) {
                   setMessages(prev => [...prev, { ...assistantMessage }]);
@@ -240,10 +233,7 @@ export default function Chat() {
       }
     } catch (error) {
       console.error("Chat error:", error);
-      setMessages(prev => [...prev, { 
-        role: 'model', 
-        text: 'Sorry, I encountered a connection error. Please try again.' 
-      }]);
+      setMessages(prev => [...prev, { role: 'model', text: 'Sorry, connection error. Please try again.' }]);
     } finally {
       setIsTyping(false);
       setCurrentTool(null);
@@ -253,103 +243,68 @@ export default function Chat() {
 
   return (
     <div className="flex flex-col h-screen bg-gray-100">
-      {/* Header */}
       <header className="bg-white shadow-sm p-4 flex justify-between items-center z-10">
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 flex-wrap">
           <h1 className="font-bold text-xl text-blue-600">Gemini Orchestrator</h1>
-          <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full font-medium">
-            📧 Gmail
-          </span>
-          <span className="text-xs bg-purple-100 text-purple-700 px-2 py-1 rounded-full font-medium">
-            📅 Calendar
-          </span>
+          <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full font-medium">📧 Gmail</span>
+          <span className="text-xs bg-purple-100 text-purple-700 px-2 py-1 rounded-full font-medium">📅 Calendar</span>
+          <span className="text-xs bg-yellow-100 text-yellow-700 px-2 py-1 rounded-full font-medium">📁 Drive</span>
         </div>
         <div className="flex items-center gap-4">
           <span className="text-sm text-gray-600 hidden md:block">{user?.email}</span>
-          <button onClick={logout} className="text-sm text-red-500 hover:text-red-700 font-medium">
-            Logout
-          </button>
+          <button onClick={logout} className="text-sm text-red-500 hover:text-red-700 font-medium">Logout</button>
         </div>
       </header>
 
-      {/* Chat Area */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-gray-400">
             <div className="text-6xl mb-4">🤖</div>
             <p className="text-xl font-medium text-gray-600">Hi {user?.given_name || 'there'}!</p>
-            <p className="text-gray-400 mb-6">I can help with your emails and calendar</p>
+            <p className="text-gray-400 mb-6">I can help with emails, calendar, and Drive files</p>
             
-            <div className="grid gap-2 text-sm max-w-lg">
-              <div 
-                className="bg-white p-3 rounded-lg shadow-sm border border-gray-100 hover:border-blue-200 cursor-pointer transition-all"
-                onClick={() => setInput("Do I have any unread emails?")}
-              >
-                💡 "Do I have any unread emails?"
-              </div>
-              <div 
-                className="bg-white p-3 rounded-lg shadow-sm border border-gray-100 hover:border-blue-200 cursor-pointer transition-all"
-                onClick={() => setInput("What's on my calendar this week?")}
-              >
-                💡 "What's on my calendar this week?"
-              </div>
-              <div 
-                className="bg-white p-3 rounded-lg shadow-sm border border-gray-100 hover:border-blue-200 cursor-pointer transition-all"
-                onClick={() => setInput("Search for emails about invoices")}
-              >
-                💡 "Search for emails about invoices"
-              </div>
-              <div 
-                className="bg-white p-3 rounded-lg shadow-sm border border-gray-100 hover:border-blue-200 cursor-pointer transition-all"
-                onClick={() => setInput("Schedule a meeting tomorrow at 2pm")}
-              >
-                💡 "Schedule a meeting tomorrow at 2pm"
-              </div>
+            <div className="grid gap-2 text-sm max-w-lg w-full">
+              {[
+                "Do I have any unread emails?", 
+                "What's on my calendar this week?", 
+                "Show me my recent files in Drive",
+                "Find the budget spreadsheet",
+                "Create a new document called Meeting Notes"
+              ].map(hint => (
+                <div key={hint} className="bg-white p-3 rounded-lg shadow-sm border hover:border-blue-200 cursor-pointer" onClick={() => setInput(hint)}>
+                  💡 "{hint}"
+                </div>
+              ))}
             </div>
           </div>
         )}
         
         {messages.map((msg, idx) => (
           <div key={idx} className="space-y-3">
-            {/* Message bubble */}
             <div className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
               <div className={`max-w-[85%] rounded-2xl p-4 ${
                 msg.role === 'user' 
                   ? 'bg-blue-600 text-white rounded-br-none' 
                   : 'bg-white text-gray-800 shadow-sm rounded-bl-none border border-gray-100'
               }`}>
-                {msg.role === 'user' ? (
-                  <p className="whitespace-pre-wrap">{msg.text}</p>
-                ) : (
-                  <FormattedText text={msg.text} />
-                )}
+                {msg.role === 'user' ? <p className="whitespace-pre-wrap">{msg.text}</p> : <FormattedText text={msg.text} />}
               </div>
             </div>
             
-            {/* Email list cards */}
             {msg.emails && msg.emails.length > 0 && (
-              <div className="ml-4">
-                <EmailList emails={msg.emails} onReadMore={handleReadEmail} />
-              </div>
+              <div className="ml-4"><EmailList emails={msg.emails} onReadMore={handleReadEmail} /></div>
             )}
+            {msg.email && <div className="ml-4"><FullEmailView email={msg.email} /></div>}
+            {msg.draft && <div className="ml-4"><DraftCard draft={msg.draft} /></div>}
             
-            {/* Full email view */}
-            {msg.email && (
-              <div className="ml-4">
-                <FullEmailView email={msg.email} />
-              </div>
+            {msg.files && msg.files.length > 0 && (
+              <div className="ml-4"><FileList files={msg.files} onReadContent={handleReadFile} /></div>
             )}
-            
-            {/* Draft confirmation */}
-            {msg.draft && (
-              <div className="ml-4">
-                <DraftCard draft={msg.draft} />
-              </div>
-            )}
+            {msg.file && <div className="ml-4"><FileContentView file={msg.file} /></div>}
+            {msg.document && <div className="ml-4"><DocumentCard document={msg.document} /></div>}
           </div>
         ))}
         
-        {/* Tool activity indicators */}
         {currentTool && (
           <div className="flex justify-start">
             <ToolIndicator toolCall={currentTool} toolResult={toolResult} />
@@ -358,29 +313,26 @@ export default function Chat() {
         
         {isTyping && !currentTool && (
           <div className="flex justify-start">
-            <div className="text-xs text-gray-400 bg-white px-3 py-2 rounded-lg shadow-sm">
-              Gemini is thinking... 
-            </div>
+            <div className="text-xs text-gray-400 bg-white px-3 py-2 rounded-lg shadow-sm">Gemini is thinking...</div>
           </div>
         )}
         
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input Area */}
       <div className="p-4 bg-white border-t border-gray-200">
         <form onSubmit={handleSubmit} className="max-w-4xl mx-auto flex gap-2">
           <input
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Ask about emails, calendar, or schedule meetings..."
-            className="flex-1 p-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            placeholder="Ask about emails, calendar, or Drive files..."
+            className="flex-1 p-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
           <button 
             type="submit" 
             disabled={!input.trim() || isTyping}
-            className="bg-blue-600 text-white px-6 py-3 rounded-xl hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+            className="bg-blue-600 text-white px-6 py-3 rounded-xl hover:bg-blue-700 disabled:opacity-50 font-medium"
           >
             Send
           </button>
