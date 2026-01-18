@@ -1,33 +1,38 @@
 import { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { EmailList, FullEmailView } from './EmailCard';
-import ReactMarkdown from 'react-markdown';
+import { EmailList, FullEmailView, DraftCard } from './EmailCard';
 
 // Tool Activity Indicator Component
 function ToolIndicator({ toolCall, toolResult }) {
   const toolIcons = {
     searchEmails: '🔍',
     readEmail: '📧',
-    draftReply: '✍️'
+    draftReply: '✍️',
+    getCalendarEvents: '📅',
+    createCalendarEvent: '📆'
   };
   
   const toolLabels = {
     searchEmails: 'Searching emails',
     readEmail: 'Reading email',
-    draftReply: 'Drafting reply'
+    draftReply: 'Creating draft',
+    getCalendarEvents: 'Checking calendar',
+    createCalendarEvent: 'Creating event'
   };
 
   if (toolResult) {
+    const successMessages = {
+      searchEmails: `Found ${toolResult.emailCount || 0} email(s)`,
+      readEmail: 'Email loaded',
+      draftReply: 'Draft created',
+      getCalendarEvents: `Found ${toolResult.eventCount || 0} event(s)`,
+      createCalendarEvent: 'Event created'
+    };
+    
     return (
       <div className="flex items-center gap-2 text-xs text-green-600 bg-green-50 px-3 py-2 rounded-lg w-fit mb-2">
         <span>✓</span>
-        <span>
-          {toolResult.name === 'searchEmails' 
-            ? `Found ${toolResult.emailCount} email(s)` 
-            : toolResult.name === 'draftReply'
-            ? 'Draft created'
-            : 'Email loaded'}
-        </span>
+        <span>{successMessages[toolResult.name] || 'Done'}</span>
       </div>
     );
   }
@@ -40,40 +45,70 @@ function ToolIndicator({ toolCall, toolResult }) {
   );
 }
 
-// Message Component with Markdown support
-function MessageContent({ text, isUser }) {
-  if (isUser) {
-    return <p className="whitespace-pre-wrap leading-relaxed">{text}</p>;
-  }
+// Simple Markdown-like text formatter
+function FormattedText({ text }) {
+  if (!text) return null;
+  
+  // Split into lines and process
+  const lines = text.split('\n');
   
   return (
-    <div className="prose prose-sm max-w-none prose-p:my-1 prose-ul:my-1 prose-li:my-0">
-      <ReactMarkdown
-        components={{
-          // Custom link styling
-          a: ({ href, children }) => (
-            <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
-              {children}
-            </a>
-          ),
-          // Custom list styling
-          ul: ({ children }) => <ul className="list-disc pl-4 space-y-1">{children}</ul>,
-          ol: ({ children }) => <ol className="list-decimal pl-4 space-y-1">{children}</ol>,
-          // Custom code block
-          code: ({ inline, children }) => 
-            inline ? (
-              <code className="bg-gray-100 px-1 py-0.5 rounded text-sm">{children}</code>
-            ) : (
-              <pre className="bg-gray-100 p-2 rounded-lg overflow-x-auto">
-                <code>{children}</code>
-              </pre>
-            )
-        }}
-      >
-        {text}
-      </ReactMarkdown>
+    <div className="space-y-2">
+      {lines.map((line, idx) => {
+        // Headers
+        if (line.startsWith('### ')) {
+          return <h4 key={idx} className="font-semibold text-gray-900 mt-2">{line.slice(4)}</h4>;
+        }
+        if (line.startsWith('## ')) {
+          return <h3 key={idx} className="font-bold text-gray-900 mt-3">{line.slice(3)}</h3>;
+        }
+        if (line.startsWith('# ')) {
+          return <h2 key={idx} className="font-bold text-lg text-gray-900 mt-3">{line.slice(2)}</h2>;
+        }
+        
+        // Bullet points
+        if (line.startsWith('- ') || line.startsWith('• ')) {
+          return (
+            <div key={idx} className="flex gap-2 ml-2">
+              <span className="text-gray-400">•</span>
+              <span>{formatInlineText(line.slice(2))}</span>
+            </div>
+          );
+        }
+        
+        // Numbered lists
+        const numberedMatch = line.match(/^(\d+)\.\s(.+)/);
+        if (numberedMatch) {
+          return (
+            <div key={idx} className="flex gap-2 ml-2">
+              <span className="text-gray-500 font-medium">{numberedMatch[1]}.</span>
+              <span>{formatInlineText(numberedMatch[2])}</span>
+            </div>
+          );
+        }
+        
+        // Empty lines
+        if (line.trim() === '') {
+          return <div key={idx} className="h-2" />;
+        }
+        
+        // Regular paragraph
+        return <p key={idx}>{formatInlineText(line)}</p>;
+      })}
     </div>
   );
+}
+
+// Format inline text (bold, italic, code)
+function formatInlineText(text) {
+  // Simple bold: **text**
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((part, i) => {
+    if (part.startsWith('**') && part.endsWith('**')) {
+      return <strong key={i} className="font-semibold">{part.slice(2, -2)}</strong>;
+    }
+    return part;
+  });
 }
 
 export default function Chat() {
@@ -83,50 +118,43 @@ export default function Chat() {
   const [isTyping, setIsTyping] = useState(false);
   const [currentTool, setCurrentTool] = useState(null);
   const [toolResult, setToolResult] = useState(null);
-  const [emailData, setEmailData] = useState(null); // Store email results
-  const [fullEmail, setFullEmail] = useState(null); // For expanded email view
   const messagesEndRef = useRef(null);
 
-  // Auto-scroll to bottom
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
-  useEffect(scrollToBottom, [messages, currentTool, emailData]);
+  useEffect(scrollToBottom, [messages, currentTool]);
 
   // Handle "Read More" click on email cards
-  const handleReadEmail = async (emailId) => {
-    setInput(`Read the full content of email ${emailId}`);
+  const handleReadEmail = (emailId) => {
+    setInput(`Read the full content of email with ID: ${emailId}`);
   };
 
   const handleSubmit = async (e) => {
-    e.preventDefault();
+    if (e) e.preventDefault();
     if (!input.trim()) return;
 
-    // 1. Add user message immediately
     const userMessage = { role: 'user', text: input };
     setMessages(prev => [...prev, userMessage]);
+    const currentInput = input;
     setInput('');
     setIsTyping(true);
     setCurrentTool(null);
     setToolResult(null);
-    setEmailData(null);
 
-    // 2. Prepare history for backend (map to Gemini format)
     const history = messages.map(m => ({
       role: m.role === 'user' ? 'user' : 'model',
       parts: [{ text: m.text }]
     }));
 
     try {
-      // 3. Start Request
       const response = await fetch('http://localhost:5000/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ message: userMessage.text, history }),
+        body: JSON.stringify({ message: currentInput, history }),
       });
 
-      // Check for auth errors
       if (response.status === 401) {
         const data = await response.json();
         if (data.needsReauth) {
@@ -136,10 +164,9 @@ export default function Chat() {
         }
       }
 
-      // 4. Handle Stream
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
-      let assistantMessage = { role: 'model', text: '', emails: null, fullEmail: null };
+      let assistantMessage = { role: 'model', text: '', emails: null, email: null, draft: null };
       let hasAddedMessage = false;
 
       while (true) {
@@ -155,34 +182,32 @@ export default function Chat() {
             if (dataStr === '[DONE]') {
               setCurrentTool(null);
               setToolResult(null);
-              break;
+              continue;
             }
 
             try {
               const data = JSON.parse(dataStr);
               
-              // Handle tool calls
               if (data.type === 'tool_call') {
                 setCurrentTool(data.toolCall);
                 setToolResult(null);
               }
               
-              // Handle tool results with email data
               if (data.type === 'tool_result') {
                 setToolResult(data.toolResult);
                 
-                // Store email data for rendering cards
+                // Store data for rendering
                 if (data.toolResult.emails) {
                   assistantMessage.emails = data.toolResult.emails;
-                  setEmailData(data.toolResult.emails);
                 }
                 if (data.toolResult.email) {
-                  assistantMessage.fullEmail = data.toolResult.email;
-                  setFullEmail(data.toolResult.email);
+                  assistantMessage.email = data.toolResult.email;
+                }
+                if (data.toolResult.draft) {
+                  assistantMessage.draft = data.toolResult.draft;
                 }
               }
               
-              // Handle final text response
               if (data.type === 'text' && data.text) {
                 setCurrentTool(null);
                 setToolResult(null);
@@ -200,7 +225,6 @@ export default function Chat() {
                 }
               }
               
-              // Handle errors
               if (data.type === 'error') {
                 console.error('Stream error:', data.error);
                 assistantMessage.text = `Sorry, an error occurred: ${data.error}`;
@@ -234,15 +258,15 @@ export default function Chat() {
         <div className="flex items-center gap-3">
           <h1 className="font-bold text-xl text-blue-600">Gemini Orchestrator</h1>
           <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full font-medium">
-            📧 Gmail Connected
+            📧 Gmail
+          </span>
+          <span className="text-xs bg-purple-100 text-purple-700 px-2 py-1 rounded-full font-medium">
+            📅 Calendar
           </span>
         </div>
         <div className="flex items-center gap-4">
           <span className="text-sm text-gray-600 hidden md:block">{user?.email}</span>
-          <button 
-            onClick={logout} 
-            className="text-sm text-red-500 hover:text-red-700 font-medium"
-          >
+          <button onClick={logout} className="text-sm text-red-500 hover:text-red-700 font-medium">
             Logout
           </button>
         </div>
@@ -252,24 +276,34 @@ export default function Chat() {
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-gray-400">
-            <div className="text-6xl mb-4">📬</div>
-            <p className="text-xl font-medium text-gray-600">
-              Good day, {user?.given_name || 'there'}!
-            </p>
-            <p className="text-gray-400 mb-6">I can help you with your emails</p>
+            <div className="text-6xl mb-4">🤖</div>
+            <p className="text-xl font-medium text-gray-600">Hi {user?.given_name || 'there'}!</p>
+            <p className="text-gray-400 mb-6">I can help with your emails and calendar</p>
             
-            <div className="grid gap-2 text-sm max-w-md">
-              <div className="bg-white p-3 rounded-lg shadow-sm border border-gray-100 hover:border-blue-200 cursor-pointer transition-all"
-                   onClick={() => setInput("Do I have any unread emails?")}>
+            <div className="grid gap-2 text-sm max-w-lg">
+              <div 
+                className="bg-white p-3 rounded-lg shadow-sm border border-gray-100 hover:border-blue-200 cursor-pointer transition-all"
+                onClick={() => setInput("Do I have any unread emails?")}
+              >
                 💡 "Do I have any unread emails?"
               </div>
-              <div className="bg-white p-3 rounded-lg shadow-sm border border-gray-100 hover:border-blue-200 cursor-pointer transition-all"
-                   onClick={() => setInput("Search for emails about invoices")}>
+              <div 
+                className="bg-white p-3 rounded-lg shadow-sm border border-gray-100 hover:border-blue-200 cursor-pointer transition-all"
+                onClick={() => setInput("What's on my calendar this week?")}
+              >
+                💡 "What's on my calendar this week?"
+              </div>
+              <div 
+                className="bg-white p-3 rounded-lg shadow-sm border border-gray-100 hover:border-blue-200 cursor-pointer transition-all"
+                onClick={() => setInput("Search for emails about invoices")}
+              >
                 💡 "Search for emails about invoices"
               </div>
-              <div className="bg-white p-3 rounded-lg shadow-sm border border-gray-100 hover:border-blue-200 cursor-pointer transition-all"
-                   onClick={() => setInput("What emails did I get today?")}>
-                💡 "What emails did I get today?"
+              <div 
+                className="bg-white p-3 rounded-lg shadow-sm border border-gray-100 hover:border-blue-200 cursor-pointer transition-all"
+                onClick={() => setInput("Schedule a meeting tomorrow at 2pm")}
+              >
+                💡 "Schedule a meeting tomorrow at 2pm"
               </div>
             </div>
           </div>
@@ -284,21 +318,32 @@ export default function Chat() {
                   ? 'bg-blue-600 text-white rounded-br-none' 
                   : 'bg-white text-gray-800 shadow-sm rounded-bl-none border border-gray-100'
               }`}>
-                <MessageContent text={msg.text} isUser={msg.role === 'user'} />
+                {msg.role === 'user' ? (
+                  <p className="whitespace-pre-wrap">{msg.text}</p>
+                ) : (
+                  <FormattedText text={msg.text} />
+                )}
               </div>
             </div>
             
-            {/* Email cards if present */}
+            {/* Email list cards */}
             {msg.emails && msg.emails.length > 0 && (
               <div className="ml-4">
                 <EmailList emails={msg.emails} onReadMore={handleReadEmail} />
               </div>
             )}
             
-            {/* Full email view if present */}
-            {msg.fullEmail && (
+            {/* Full email view */}
+            {msg.email && (
               <div className="ml-4">
-                <FullEmailView email={msg.fullEmail} />
+                <FullEmailView email={msg.email} />
+              </div>
+            )}
+            
+            {/* Draft confirmation */}
+            {msg.draft && (
+              <div className="ml-4">
+                <DraftCard draft={msg.draft} />
               </div>
             )}
           </div>
@@ -314,7 +359,7 @@ export default function Chat() {
         {isTyping && !currentTool && (
           <div className="flex justify-start">
             <div className="text-xs text-gray-400 bg-white px-3 py-2 rounded-lg shadow-sm">
-              Gemini is thinking...
+              Gemini is thinking... 
             </div>
           </div>
         )}
@@ -329,13 +374,13 @@ export default function Chat() {
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Ask about your emails..."
-            className="flex-1 p-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+            placeholder="Ask about emails, calendar, or schedule meetings..."
+            className="flex-1 p-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           />
           <button 
             type="submit" 
             disabled={!input.trim() || isTyping}
-            className="bg-blue-600 text-white px-6 py-3 rounded-xl hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium transition-colors"
+            className="bg-blue-600 text-white px-6 py-3 rounded-xl hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
           >
             Send
           </button>

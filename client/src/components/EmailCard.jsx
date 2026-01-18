@@ -6,7 +6,8 @@ function formatDate(dateString) {
   try {
     const date = new Date(dateString);
     const now = new Date();
-    const diffDays = Math.floor((now - date) / (1000 * 60 * 60 * 24));
+    // Use Math.abs or specific date logic to prevent negative days from future dates
+    const diffDays = Math.floor(Math.abs(now - date) / (1000 * 60 * 60 * 24));
     
     if (diffDays === 0) {
       return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -25,10 +26,8 @@ function formatDate(dateString) {
 // Extract name from email address
 function extractName(fromString) {
   if (!fromString) return 'Unknown';
-  // Handle "Name <email@example.com>" format
   const match = fromString.match(/^([^<]+)</);
   if (match) return match[1].trim();
-  // Handle plain email
   return fromString.split('@')[0];
 }
 
@@ -36,6 +35,7 @@ function extractName(fromString) {
 function getInitials(name) {
   return name
     .split(' ')
+    .filter(word => word.length > 0) // Handle extra spaces in names
     .map(word => word[0])
     .join('')
     .toUpperCase()
@@ -64,9 +64,11 @@ export function EmailCard({ email, onReadMore, compact = false }) {
   
   if (compact) {
     return (
-      <div className="flex items-center gap-3 p-2 hover:bg-gray-50 rounded-lg cursor-pointer transition-colors"
-           onClick={() => onReadMore?.(email.id)}>
-        <div className={`w-8 h-8 rounded-full ${avatarColor} flex items-center justify-center text-white text-xs font-medium`}>
+      <div 
+        className="flex items-center gap-3 p-2 hover:bg-gray-50 rounded-lg cursor-pointer transition-colors"
+        onClick={() => onReadMore?.(email.id)}
+      >
+        <div className={`w-8 h-8 rounded-full ${avatarColor} flex items-center justify-center text-white text-xs font-medium flex-shrink-0`}>
           {initials}
         </div>
         <div className="flex-1 min-w-0">
@@ -82,7 +84,6 @@ export function EmailCard({ email, onReadMore, compact = false }) {
   
   return (
     <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow">
-      {/* Header */}
       <div className="flex items-start gap-3 mb-3">
         <div className={`w-10 h-10 rounded-full ${avatarColor} flex items-center justify-center text-white font-medium flex-shrink-0`}>
           {initials}
@@ -96,36 +97,31 @@ export function EmailCard({ email, onReadMore, compact = false }) {
         </div>
       </div>
       
-      {/* Subject */}
       <h3 className="font-medium text-gray-900 mb-2 line-clamp-2">
         {email.subject || '(No Subject)'}
       </h3>
       
-      {/* Snippet/Body Preview */}
       <p className="text-sm text-gray-600 line-clamp-3 mb-3">
         {email.snippet || email.body?.slice(0, 200)}
       </p>
       
-      {/* Actions */}
-      <div className="flex items-center gap-2 pt-2 border-t border-gray-100">
-        {onReadMore && (
+      {onReadMore && (
+        <div className="flex items-center gap-2 pt-2 border-t border-gray-100">
           <button 
             onClick={() => onReadMore(email.id)}
             className="text-xs text-blue-600 hover:text-blue-800 font-medium flex items-center gap-1"
           >
-            <span>📖</span> Read full email
+            📖 Read full email
           </button>
-        )}
-        <span className="text-xs text-gray-400">•</span>
-        <span className="text-xs text-gray-400">ID: {email.id?.slice(0, 8)}...</span>
-      </div>
+        </div>
+      )}
     </div>
   );
 }
 
 // Email List Container
 export function EmailList({ emails, onReadMore, title }) {
-  const [viewMode, setViewMode] = useState('cards'); // 'cards' or 'compact'
+  const [viewMode, setViewMode] = useState('cards');
   
   if (!emails || emails.length === 0) {
     return (
@@ -138,11 +134,9 @@ export function EmailList({ emails, onReadMore, title }) {
   
   return (
     <div className="space-y-3">
-      {/* Header */}
       <div className="flex items-center justify-between">
         <h3 className="font-medium text-gray-700 flex items-center gap-2">
-          <span>📧</span>
-          {title || `Found ${emails.length} email${emails.length !== 1 ? 's' : ''}`}
+          📧 {title || `Found ${emails.length} email${emails.length !== 1 ? 's' : ''}`}
         </h3>
         <div className="flex gap-1">
           <button 
@@ -150,23 +144,18 @@ export function EmailList({ emails, onReadMore, title }) {
             className={`p-1.5 rounded ${viewMode === 'cards' ? 'bg-blue-100 text-blue-600' : 'text-gray-400 hover:text-gray-600'}`}
             title="Card view"
           >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
-            </svg>
+            ▦
           </button>
           <button 
             onClick={() => setViewMode('compact')}
             className={`p-1.5 rounded ${viewMode === 'compact' ? 'bg-blue-100 text-blue-600' : 'text-gray-400 hover:text-gray-600'}`}
             title="List view"
           >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-            </svg>
+            ≡
           </button>
         </div>
       </div>
       
-      {/* Email Grid/List */}
       {viewMode === 'cards' ? (
         <div className="grid gap-3 md:grid-cols-2">
           {emails.map((email, idx) => (
@@ -184,7 +173,7 @@ export function EmailList({ emails, onReadMore, title }) {
   );
 }
 
-// Full Email View (for when user clicks "Read More")
+// Full Email View
 export function FullEmailView({ email, onClose }) {
   if (!email) return null;
   
@@ -194,7 +183,6 @@ export function FullEmailView({ email, onClose }) {
   
   return (
     <div className="bg-white rounded-xl border border-gray-200 shadow-lg overflow-hidden">
-      {/* Header */}
       <div className="bg-gray-50 p-4 border-b border-gray-200">
         <div className="flex items-start justify-between">
           <div className="flex items-start gap-3">
@@ -204,29 +192,19 @@ export function FullEmailView({ email, onClose }) {
             <div>
               <h2 className="font-semibold text-gray-900">{name}</h2>
               <p className="text-sm text-gray-500">{email.from}</p>
-              {email.to && (
-                <p className="text-xs text-gray-400 mt-1">To: {email.to}</p>
-              )}
+              {email.to && <p className="text-xs text-gray-400 mt-1">To: {email.to}</p>}
             </div>
           </div>
           <div className="text-right">
             <span className="text-sm text-gray-500">{formatDate(email.date)}</span>
             {onClose && (
-              <button 
-                onClick={onClose}
-                className="ml-3 text-gray-400 hover:text-gray-600"
-              >
-                ✕
-              </button>
+              <button onClick={onClose} className="ml-3 text-gray-400 hover:text-gray-600">✕</button>
             )}
           </div>
         </div>
-        <h1 className="font-bold text-lg text-gray-900 mt-3">
-          {email.subject || '(No Subject)'}
-        </h1>
+        <h1 className="font-bold text-lg text-gray-900 mt-3">{email.subject || '(No Subject)'}</h1>
       </div>
       
-      {/* Body */}
       <div className="p-4">
         <div className="prose prose-sm max-w-none text-gray-700 whitespace-pre-wrap">
           {email.body || email.snippet}
@@ -235,3 +213,27 @@ export function FullEmailView({ email, onClose }) {
     </div>
   );
 }
+
+// Draft Confirmation Card
+export function DraftCard({ draft }) {
+  if (!draft) return null;
+  
+  return (
+    <div className="bg-green-50 border border-green-200 rounded-xl p-4">
+      <div className="flex items-start gap-3">
+        <div className="w-10 h-10 rounded-full bg-green-500 flex items-center justify-center text-white">
+          ✓
+        </div>
+        <div className="flex-1">
+          <h3 className="font-semibold text-green-800">Draft Created!</h3>
+          <p className="text-sm text-green-700 mt-1">To: {draft.to}</p>
+          <p className="text-sm text-green-700">Subject: {draft.subject}</p>
+          <p className="text-xs text-green-600 mt-2 italic">"{draft.bodyPreview}"</p>
+          <p className="text-xs text-green-600 mt-2">📝 Find it in your Gmail Drafts folder</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default EmailCard;

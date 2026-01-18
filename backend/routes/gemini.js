@@ -8,16 +8,13 @@ const oauth2Client = require('../utils/googleClient');
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// Helper function to get header value
 function getHeader(headers, name) {
   const header = headers.find(h => h.name.toLowerCase() === name.toLowerCase());
   return header ? header.value : '';
 }
 
-// Helper function to extract email body
 function extractEmailBody(payload) {
   let body = '';
-  
   if (payload.body && payload.body.data) {
     body = Buffer.from(payload.body.data, 'base64').toString('utf-8');
   } else if (payload.parts) {
@@ -36,22 +33,20 @@ function extractEmailBody(payload) {
       }
     }
   }
-  
   return body;
 }
 
-// Tool executor - runs the actual Gmail API calls
 async function executeTool(toolName, args, session) {
   oauth2Client.setCredentials(session.tokens);
   const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+  const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
   
-  console.log(`Executing tool: ${toolName} with args:`, args);
+  console.log(`Executing tool: ${toolName} with args: `, args);
   
   try {
     switch (toolName) {
       case 'searchEmails': {
         const maxResults = Math.min(args.maxResults || 5, 10);
-        
         const listResponse = await gmail.users.messages.list({
           userId: 'me',
           q: args.query,
@@ -59,14 +54,9 @@ async function executeTool(toolName, args, session) {
         });
         
         if (!listResponse.data.messages || listResponse.data.messages.length === 0) {
-          return { 
-            success: true,
-            emails: [], 
-            message: `No emails found matching "${args.query}".` 
-          };
+          return { success: true, emails: [], message: `No emails found matching "${args.query}".` };
         }
         
-        // Get details for each message
         const emails = await Promise.all(
           listResponse.data.messages.map(async (msg) => {
             const detail = await gmail.users.messages.get({
@@ -75,9 +65,7 @@ async function executeTool(toolName, args, session) {
               format: 'metadata',
               metadataHeaders: ['From', 'Subject', 'Date', 'To']
             });
-            
             const headers = detail.data.payload.headers;
-            
             return {
               id: msg.id,
               threadId: msg.threadId,
@@ -91,12 +79,7 @@ async function executeTool(toolName, args, session) {
           })
         );
         
-        return { 
-          success: true,
-          emails,
-          count: emails.length,
-          query: args.query
-        };
+        return { success: true, emails, count: emails.length, query: args.query };
       }
       
       case 'readEmail': {
@@ -105,7 +88,6 @@ async function executeTool(toolName, args, session) {
           id: args.emailId,
           format: 'full'
         });
-        
         const headers = message.data.payload.headers;
         const body = extractEmailBody(message.data.payload);
         
@@ -127,7 +109,6 @@ async function executeTool(toolName, args, session) {
       
       case 'draftReply': {
         const { to, subject, body, inReplyTo } = args;
-        
         const emailLines = [
           `To: ${to}`,
           `Subject: ${subject.startsWith('Re: ') ? subject : `Re: ${subject}`}`,
@@ -136,24 +117,15 @@ async function executeTool(toolName, args, session) {
           '',
           body
         ];
+        if (inReplyTo) emailLines.splice(2, 0, `In-Reply-To: ${inReplyTo}`);
         
-        if (inReplyTo) {
-          emailLines.splice(2, 0, `In-Reply-To: ${inReplyTo}`);
-        }
-        
-        const email = emailLines.join('\r\n');
-        const encodedEmail = Buffer.from(email).toString('base64')
-          .replace(/\+/g, '-')
-          .replace(/\//g, '_')
-          .replace(/=+$/, '');
+        const emailContent = emailLines.join('\r\n');
+        const encodedEmail = Buffer.from(emailContent).toString('base64')
+          .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
         
         const draft = await gmail.users.drafts.create({
           userId: 'me',
-          requestBody: {
-            message: {
-              raw: encodedEmail
-            }
-          }
+          requestBody: { message: { raw: encodedEmail } }
         });
         
         return {
@@ -161,10 +133,79 @@ async function executeTool(toolName, args, session) {
           draft: {
             id: draft.data.id,
             to,
-            subject: subject.startsWith('Re:') ? subject : `Re: ${subject}`,
+            subject: subject.startsWith('Re: ') ? subject : `Re: ${subject}`,
             bodyPreview: body.slice(0, 100) + (body.length > 100 ? '...' : '')
           },
-          message: 'Draft created successfully! You can find it in your Gmail Drafts folder.'
+          message: 'Draft created! Find it in your Gmail Drafts.'
+        };
+      }
+      
+      case 'getCalendarEvents': {
+        const now = new Date();
+        const timeMin = args.timeMin || now.toISOString();
+        const timeMax = args.timeMax || new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
+        
+        const response = await calendar.events.list({
+          calendarId: 'primary',
+          timeMin: timeMin,
+          timeMax: timeMax,
+          maxResults: args.maxResults || 10,
+          singleEvents: true,
+          orderBy: 'startTime',
+          q: args.query || undefined
+        });
+        
+        const events = (response.data.items || []).map(event => ({
+          id: event.id,
+          summary: event.summary || '(No title)',
+          description: event.description || '',
+          start: event.start.dateTime || event.start.date,
+          end: event.end.dateTime || event.end.date,
+          location: event.location || '',
+          attendees: (event.attendees || []).map(a => a.email),
+          htmlLink: event.htmlLink,
+          isAllDay: !event.start.dateTime
+        }));
+        
+        return {
+          success: true,
+          events,
+          count: events.length,
+          timeRange: { from: timeMin, to: timeMax }
+        };
+      }
+      
+      case 'createCalendarEvent': {
+        const { summary, description, startTime, endTime, attendees, location } = args;
+        const event = {
+          summary: summary,
+          description: description || '',
+          location: location || '',
+          start: { dateTime: startTime },
+          end: { dateTime: endTime }
+        };
+        
+        if (attendees && attendees.length > 0) {
+          event.attendees = attendees.map(email => ({ email }));
+        }
+        
+        const response = await calendar.events.insert({
+          calendarId: 'primary',
+          requestBody: event,
+          sendUpdates: attendees ? 'all' : 'none'
+        });
+        
+        return {
+          success: true,
+          event: {
+            id: response.data.id,
+            summary: response.data.summary,
+            start: response.data.start.dateTime || response.data.start.date,
+            end: response.data.end.dateTime || response.data.end.date,
+            htmlLink: response.data.htmlLink,
+            attendees: attendees || []
+          },
+          message: 'Event created successfully!'
         };
       }
       
@@ -173,14 +214,10 @@ async function executeTool(toolName, args, session) {
     }
   } catch (error) {
     console.error(`Tool execution error (${toolName}):`, error.message);
-    return { 
-      success: false, 
-      error: `Failed to execute ${toolName}: ${error.message}` 
-    };
+    return { success: false, error: `Failed to execute ${toolName}: ${error.message}` };
   }
 }
 
-// Protected Chat Route with Function Calling
 router.post('/chat', isAuthenticated, async (req, res) => {
   const { message, history } = req.body;
 
@@ -195,59 +232,55 @@ router.post('/chat', isAuthenticated, async (req, res) => {
       tools: [{ functionDeclarations: toolDefinitions }]
     });
 
-    const chat = model.startChat({
-      history: history || []
-    });
-
+    const chat = model.startChat({ history: history || [] });
     let result = await chat.sendMessage(message);
     let response = result.response;
 
     let loopCount = 0;
     const maxLoops = 5;
     
-    while (response.functionCalls && response.functionCalls().length > 0 && loopCount < maxLoops) {
+    // Gemini can call multiple tools at once, so we loop through functionCalls()
+    while (response.functionCalls() && response.functionCalls().length > 0 && loopCount < maxLoops) {
       loopCount++;
-      const functionCall = response.functionCalls()[0];
+      const calls = response.functionCalls();
+      const functionResponses = [];
+
+      for (const call of calls) {
+        console.log(`Tool Call: ${call.name}`);
+        
+        res.write(`data: ${JSON.stringify({ 
+          type: 'tool_call',
+          toolCall: { name: call.name, args: call.args }
+        })}\n\n`);
+        
+        const toolResult = await executeTool(call.name, call.args, req.session);
+        
+        res.write(`data: ${JSON.stringify({ 
+          type: 'tool_result',
+          toolResult: {
+            name: call.name,
+            success: toolResult.success,
+            emailCount: toolResult.emails?.length || (toolResult.email ? 1 : 0),
+            eventCount: toolResult.events?.length || (toolResult.event ? 1 : 0),
+            emails: toolResult.emails || null,
+            email: toolResult.email || null,
+            draft: toolResult.draft || null,
+            events: toolResult.events || null,
+            event: toolResult.event || null
+          }
+        })}\n\n`);
+
+        functionResponses.push({
+          functionResponse: { name: call.name, response: toolResult }
+        });
+      }
       
-      console.log(`Function call ${loopCount}:`, functionCall.name);
-      
-      res.write(`data: ${JSON.stringify({ 
-        type: 'tool_call',
-        toolCall: { 
-          name: functionCall.name, 
-          args: functionCall.args 
-        }
-      })}\n\n`);
-      
-      const toolResult = await executeTool(
-        functionCall.name, 
-        functionCall.args,
-        req.session
-      );
-      
-      res.write(`data: ${JSON.stringify({ 
-        type: 'tool_result',
-        toolResult: {
-          name: functionCall.name,
-          success: toolResult.success,
-          emailCount: toolResult.emails?.length || (toolResult.email ? 1 : 0),
-          emails: toolResult.emails || null,
-          email: toolResult.email || null,
-          draft: toolResult.draft || null
-        }
-      })}\n\n`);
-      
-      result = await chat.sendMessage([{
-        functionResponse: {
-          name: functionCall.name,
-          response: toolResult
-        }
-      }]);
+      // Send all tool results back to Gemini to continue the conversation
+      result = await chat.sendMessage(functionResponses);
       response = result.response;
     }
     
     const text = response.text();
-    
     res.write(`data: ${JSON.stringify({ type: 'text', text })}\n\n`);
     res.write('data: [DONE]\n\n');
     res.end();

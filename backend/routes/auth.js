@@ -3,44 +3,44 @@ const router = express.Router();
 const { google } = require('googleapis');
 const oauth2Client = require('../utils/googleClient');
 
-// 1. Redirect to Google
+// Redirect user to Google Consent Screen
 router.get('/google', (req, res) => {
   const scopes = [
     'https://www.googleapis.com/auth/userinfo.profile',
     'https://www.googleapis.com/auth/userinfo.email',
-    // Gmail read-only scope - allows reading emails
     'https://www.googleapis.com/auth/gmail.readonly',
-    // Gmail compose scope - allows creating drafts (NOT sending)
-    'https://www.googleapis.com/auth/gmail.compose'
+    'https://www.googleapis.com/auth/gmail.compose',
+    // Calendar scopes
+    'https://www.googleapis.com/auth/calendar.readonly',
+    'https://www.googleapis.com/auth/calendar.events'
   ];
 
   const url = oauth2Client.generateAuthUrl({
-    access_type: 'offline',
+    access_type: 'offline', // Critical for getting a refresh token
     scope: scopes,
-    prompt: 'consent'
+    prompt: 'consent' // Forces refresh token to be sent on every login
   });
   
   res.redirect(url);
 });
 
-// 2. Callback from Google
+// Google Auth Callback
 router.get('/google/callback', async (req, res) => {
   const { code } = req.query;
   try {
     const { tokens } = await oauth2Client.getToken(code);
     oauth2Client.setCredentials(tokens);
     
-    // Store in session
+    // Store tokens in the session
     req.session.tokens = tokens;
     
-    // Get basic user info
     const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
     const userInfo = await oauth2.userinfo.get();
+    
+    // Store user profile info in the session
     req.session.user = userInfo.data;
 
     console.log(`User logged in: ${userInfo.data.email}`);
-    
-    // Redirect to Frontend
     res.redirect(process.env.FRONTEND_URL); 
   } catch (error) {
     console.error('Auth Error:', error);
@@ -48,7 +48,7 @@ router.get('/google/callback', async (req, res) => {
   }
 });
 
-// 3. Status Check (for Frontend)
+// Get current user status
 router.get('/user', (req, res) => {
   res.json({ 
     isAuthenticated: !!req.session.tokens, 
@@ -56,10 +56,15 @@ router.get('/user', (req, res) => {
   });
 });
 
-// 4. Logout
+// Logout and clear session
 router.post('/logout', (req, res) => {
-  req.session.destroy();
-  res.json({ message: 'Logged out' });
+  req.session.destroy((err) => {
+    if (err) {
+      return res.status(500).json({ message: 'Could not log out' });
+    }
+    res.clearCookie('connect.sid'); // Assuming default express-session cookie name
+    res.json({ message: 'Logged out' });
+  });
 });
 
 module.exports = router;
