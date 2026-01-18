@@ -1,139 +1,121 @@
 const { google } = require('googleapis');
-
-// Helper function to extract email body
-function extractEmailBody(payload) {
-    let body = '';
-
-    // Simple text body
-    if (payload.body && payload.body.data) {
-        body = Buffer.from(payload.body.data, 'base64').toString('utf-8');
-    }
-    // Multipart message - find text/plain or text/html
-    else if (payload.parts) {
-        for (const part of payload.parts) {
-            if (part.mimeType === 'text/plain' && part.body && part.body.data) {
-                body = Buffer.from(part.body.data, 'base64').toString('utf-8');
-                break;
-            }
-            // Nested parts (for complex emails)
-            if (part.parts) {
-                for (const subPart of part.parts) {
-                    if (subPart.mimeType === 'text/plain' && subPart.body && subPart.body.data) {
-                        body = Buffer.from(subPart.body.data, 'base64').toString('utf-8');
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    return body;
-}
-
-// Helper function to get header value
-function getHeader(headers, name) {
-    const header = headers.find(h => h.name.toLowerCase() === name.toLowerCase());
-    return header ? header.value : '';
-}
+const { simpleParser } = require('mailparser');
 
 class GmailService {
-    constructor(authClient) {
-        this.gmail = google.gmail({ version: 'v1', auth: authClient });
+  constructor(authClient) {
+    this.gmail = google.gmail({ version: 'v1', auth: authClient });
+  }
+
+  // Helper to extract clean data from raw email
+  async _parseEmailContent(rawBase64) {
+    try {
+      const decoded = Buffer.from(rawBase64, 'base64');
+      const parsed = await simpleParser(decoded);
+      return {
+        subject: parsed.subject || '(No Subject)',
+        from: parsed.from?.text || 'Unknown',
+        to: parsed.to?.text || 'Unknown',
+        date: parsed.date,
+        body: parsed.text || parsed.html || '(No Content)', // Prefer text, fallback to HTML
+        snippet: parsed.text ? parsed.text.slice(0, 150) : ''
+      };
+    } catch (e) {
+      console.error("Parse Error:", e);
+      return { body: "Error parsing email content." };
+    }
+  }
+
+  async searchEmails(query, maxResults = 5) {
+    const limit = Math.min(maxResults, 10);
+    const listResponse = await this.gmail.users.messages.list({
+      userId: 'me',
+      q: query,
+      maxResults: limit
+    });
+
+    if (!listResponse.data.messages || listResponse.data.messages.length === 0) {
+      return { success: true, emails: [], message: `No emails found matching "${query}".` };
     }
 
-    async searchEmails(query, maxResults = 5) {
-        const limit = Math.min(maxResults, 10);
-        const listResponse = await this.gmail.users.messages.list({
-            userId: 'me',
-            q: query,
-            maxResults: limit
+    // Fetch details in parallel
+    const emails = await Promise.all(
+      listResponse.data.messages.map(async (msg) => {
+        const detail = await this.gmail.users.messages.get({
+          userId: 'me',
+          id: msg.id,
+          format: 'full' // We need full format for the parser
         });
+        
+        // We use the snippet from metadata for the list view to be fast
+        const headers = detail.data.payload.headers;
+        const getHeader = (name) => headers.find(h => h.name.toLowerCase() === name.toLowerCase())?.value;
 
-        if (!listResponse.data.messages || listResponse.data.messages.length === 0) {
-            return { success: true, emails: [], message: `No emails found matching "${query}".` };
+        return {
+          id: msg.id,
+          threadId: msg.threadId,
+          from: getHeader('from'),
+          subject: getHeader('subject'),
+          date: getHeader('date'),
+          snippet: detail.data.snippet
+        };
+      })
+    );
+
+    return { success: true, emails, count: emails.length, query };
+  }
+
+  async readEmail(emailId) {
+    try {
+      const response = await this.gmail.users.messages.get({
+        userId: 'me',
+        id: emailId,
+        format: 'raw' // Get raw MIME for robust parsing
+      });
+
+      const parsedData = await this._parseEmailContent(response.data.raw);
+
+      return {
+        success: true,
+        email: {
+          id: emailId,
+          ...parsedData
         }
-
-        const emails = await Promise.all(
-            listResponse.data.messages.map(async (msg) => {
-                const detail = await this.gmail.users.messages.get({
-                    userId: 'me',
-                    id: msg.id,
-                    format: 'metadata',
-                    metadataHeaders: ['From', 'Subject', 'Date', 'To']
-                });
-                const headers = detail.data.payload.headers;
-                return {
-                    id: msg.id,
-                    threadId: msg.threadId,
-                    from: getHeader(headers, 'From'),
-                    to: getHeader(headers, 'To'),
-                    subject: getHeader(headers, 'Subject') || '(No Subject)',
-                    date: getHeader(headers, 'Date'),
-                    snippet: detail.data.snippet,
-                    labelIds: detail.data.labelIds || []
-                };
-            })
-        );
-
-        return { success: true, emails, count: emails.length, query };
+      };
+    } catch (error) {
+      return { success: false, error: "Failed to read email." };
     }
+  }
 
-    async readEmail(emailId) {
-        const message = await this.gmail.users.messages.get({
-            userId: 'me',
-            id: emailId,
-            format: 'full'
-        });
-        const headers = message.data.payload.headers;
-        const body = extractEmailBody(message.data.payload);
+  async draftReply(to, subject, body, inReplyTo) {
+    const emailLines = [
+      `To: ${to}`,
+      `Subject: ${subject.startsWith('Re: ') ? subject : `Re: ${subject}`}`,
+      'Content-Type: text/plain; charset=utf-8',
+      'MIME-Version: 1.0',
+      '',
+      body
+    ];
+    if (inReplyTo) emailLines.splice(2, 0, `In-Reply-To: ${inReplyTo}`);
 
-        return {
-            success: true,
-            email: {
-                id: message.data.id,
-                threadId: message.data.threadId,
-                from: getHeader(headers, 'From'),
-                to: getHeader(headers, 'To'),
-                subject: getHeader(headers, 'Subject') || '(No Subject)',
-                date: getHeader(headers, 'Date'),
-                body: body || message.data.snippet,
-                snippet: message.data.snippet,
-                labelIds: message.data.labelIds || []
-            }
-        };
-    }
+    const emailContent = emailLines.join('\r\n');
+    const encodedEmail = Buffer.from(emailContent).toString('base64')
+      .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
-    async draftReply(to, subject, body, inReplyTo) {
-        const emailLines = [
-            `To: ${to}`,
-            `Subject: ${subject.startsWith('Re: ') ? subject : `Re: ${subject}`}`,
-            'Content-Type: text/plain; charset=utf-8',
-            'MIME-Version: 1.0',
-            '',
-            body
-        ];
-        if (inReplyTo) emailLines.splice(2, 0, `In-Reply-To: ${inReplyTo}`);
+    const draft = await this.gmail.users.drafts.create({
+      userId: 'me',
+      requestBody: { message: { raw: encodedEmail } }
+    });
 
-        const emailContent = emailLines.join('\r\n');
-        const encodedEmail = Buffer.from(emailContent).toString('base64')
-            .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-
-        const draft = await this.gmail.users.drafts.create({
-            userId: 'me',
-            requestBody: { message: { raw: encodedEmail } }
-        });
-
-        return {
-            success: true,
-            draft: {
-                id: draft.data.id,
-                to,
-                subject: subject.startsWith('Re: ') ? subject : `Re: ${subject}`,
-                bodyPreview: body.slice(0, 100) + (body.length > 100 ? '...' : '')
-            },
-            message: 'Draft created! Find it in your Gmail Drafts.'
-        };
-    }
+    return {
+      success: true,
+      draft: {
+        id: draft.data.id,
+        to,
+        subject: subject,
+        bodyPreview: body.slice(0, 100)
+      }
+    };
+  }
 }
 
 module.exports = GmailService;
