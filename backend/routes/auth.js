@@ -1,14 +1,15 @@
 const express = require('express');
 const router = express.Router();
 const { google } = require('googleapis');
-const oauth2Client = require('../utils/googleClient'); // Import from utils
+const oauth2Client = require('../utils/googleClient');
 
 // 1. Redirect to Google
 router.get('/google', (req, res) => {
   const scopes = [
     'https://www.googleapis.com/auth/userinfo.profile',
-    'https://www.googleapis.com/auth/userinfo.email'
-    // Week 2 TODO: Add Gmail scopes here
+    'https://www.googleapis.com/auth/userinfo.email',
+    // Gmail read-only scope - allows reading emails but not sending/deleting
+    'https://www.googleapis.com/auth/gmail.readonly'
   ];
 
   const url = oauth2Client.generateAuthUrl({
@@ -20,7 +21,7 @@ router.get('/google', (req, res) => {
   res.redirect(url);
 });
 
-// 2. Callback from Google
+// 2.  Callback from Google
 router.get('/google/callback', async (req, res) => {
   const { code } = req.query;
   try {
@@ -31,9 +32,9 @@ router.get('/google/callback', async (req, res) => {
     req.session.tokens = tokens;
     
     // Get basic user info
-    const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
+    const oauth2 = google.oauth2({ version: 'v2', auth:  oauth2Client });
     const userInfo = await oauth2.userinfo.get();
-    req.session.user = userInfo.data;
+    req.session.user = userInfo. data;
 
     console.log(`User logged in: ${userInfo.data.email}`);
     
